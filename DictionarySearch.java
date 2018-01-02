@@ -17,15 +17,15 @@ import java.util.regex.Pattern;
 
 public class DictionarySearch {
 	
-	static File dict0to3 = new File("/home/joe/Desktop/Security/Security/Assignment2/Dict0to3.txt");
+	static File dict0to3 = new File("C:\Users\mount\Documents\School\ComputerSecurity\Assignment2\Dict0to3.txt");
 	static FileWriter f0to3 = null;
-	static File dict4to7 = new File("/home/joe/Desktop/Security/Security/Assignment2/Dict4to7.txt");
+	static File dict4to7 = new File("C:\Users\mount\Documents\School\ComputerSecurity\Assignment2\Dict4to7.txt");
 	static FileWriter f4to7 = null;
-	static File dict8toB = new File("/home/joe/Desktop/Security/Security/Assignment2/Dict8toB.txt");
+	static File dict8toB = new File("C:\Users\mount\Documents\School\ComputerSecurity\Assignment2\/Dict8toB.txt");
 	static FileWriter f8toB = null;
-	static File dictCtoF = new File("/home/joe/Desktop/Security/Security/Assignment2/DictCtoF.txt");
+	static File dictCtoF = new File("C:\Users\mount\Documents\School\ComputerSecurity\Assignment2\DictCtoF.txt");
 	static FileWriter fCtoF = null;
-	static File passwords = new File("/home/joe/Downloads/xaa");
+	static File passwords = new File("C:\Users\mount\Downloads\xaa");
 	static long startTime;
 	static MessageDigest md5 = null;
 	static BufferedReader in = null;
