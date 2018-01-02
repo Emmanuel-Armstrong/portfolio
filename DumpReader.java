@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
  
 public class DumpReader {
 	
-	static File dumpFile = new File("/home/joe/Desktop/Security/Security/Assignment1/memorydump.dmp");
+	static File dumpFile = new File("C:\Users\mount\Documents\School\ComputerSecurity\Assignment1\memorydump.dmp");
 	static FileInputStream fis = null;
 	static byte[] charsOfFile = new byte[(int)dumpFile.length()]; 
 	
