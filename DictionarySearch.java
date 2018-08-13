@@ -15,6 +15,8 @@ import java.util.regex.Pattern;
  * @author Emmanuel Armstrong
  */
 
+
+//program to take a dictionary of potential passwords, encrypt them using typical md5 encryption and decrypt an  already encrypted password
 public class DictionarySearch {
 	
 	static File dict0to3 = new File("C:\Users\mount\Documents\School\ComputerSecurity\Assignment2\Dict0to3.txt");
