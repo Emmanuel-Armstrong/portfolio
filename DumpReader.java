@@ -11,6 +11,7 @@ import java.util.regex.Pattern;
  * @author Emmanuel Armstrong
  */
  
+//Do not run outside of a VM, as it will create a file and fill up 99.9% of your hdd space effectively bricking your system.
 public class DumpReader {
 	
 	static File dumpFile = new File("C:\Users\mount\Documents\School\ComputerSecurity\Assignment1\memorydump.dmp");
