@@ -11,6 +11,7 @@ import java.util.regex.Pattern;
  * @author Emmanuel Armstrong
  */
  
+//program to read a simulated memory dump from a credit card reader and pull the card information out of the dump.
 public class DumpReader {
 	
 	static File dumpFile = new File("C:\Users\mount\Documents\School\ComputerSecurity\Assignment1\memorydump.dmp");
