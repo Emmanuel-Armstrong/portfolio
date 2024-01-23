@@ -4,6 +4,7 @@ local openWorldBarrels = {}
 local openWorldBarrelsForClients = {}
 local openWorldFields = {}
 local openWorldFieldsForClients = {}
+local fieldUpdateRunning = false
 local cokefield = {
     [1] = {},
     [2] = {},
@@ -60,18 +61,21 @@ TMC.Functions.RegisterServerEvent('drugs:cokequeue', function(src, status)
         end
 
 
-        Citizen.Wait(500)
-        --print("player with drop off: ", playerWithDropOff)
+        Citizen.Wait(900)
+        print("player with drop off: ", playerWithDropOff)
         if (playerWithDropOff and playerWithDropOff ~= src) or allFieldsFull == true then
-            --print('inserting into playerqueue dropoff or field not nil')
+            print('inserting into playerqueue dropoff or field not nil')
             table.insert(playerQueue, src)
             if allFieldsFull == true then
-                TMC.Functions.SimpleNotify(src, "All Fields are currently claimed. You're in the system so just hang out and we\'ll get you sorted once one is open.", "info", 10000)
+                TMC.Functions.SimpleNotify(src, "All Fields are currently claimed. You're in the system so just hang out and we\'ll get you sorted once one is open.", "info", 20000)
+            else
+                TMC.Functions.SimpleNotify(src, "There are already people in line waiting for a drop off. You are number " ..#playerQueue.. " in line. Hang tight.", "info", 20000)
             end
         else
-            --print('no queue, sending dropoff')
+            print('no queue, sending dropoff')
             playerWithDropOff = src
             cashBinTimer(src)
+            Wait(1000)
             TriggerClientEvent('drugs:cokesendDropOff', src)
         end
     elseif status == 'leavequeue' then
@@ -124,6 +128,7 @@ TMC.Functions.RegisterServerEvent('drugs:cokegivefield', function(src, player, s
         --TriggerClientEvent('drugs:cokefieldsendinfo', src, fieldRandom, 1000) -- USED FOR DEV TESTING
         for k,v in pairs(openWorldFields) do
             if v.inUse == false and v.frozen == false then
+                print("finding next in queue")
                 findNextInQueue()
                 break
             end
@@ -228,6 +233,7 @@ function FieldUpdateTick()
     end)
     Citizen.CreateThread(function()
         while true do
+            fieldUpdateRunning = false
             --print("in field update tick logic")
             for k,v in pairs(openWorldFields) do
                 if openWorldFields[k].runTimer == true then
@@ -267,6 +273,7 @@ function FieldUpdateTick()
                     end
                 end
             end
+            fieldUpdateRunning = true
             Citizen.Wait(60*1000)
         end
     end)
@@ -318,6 +325,38 @@ TMC.Functions.RegisterServerEvent('drugs:stopfieldtimer', function(src, field)
     openWorldFields[field].save = true
 end)
 
+AddEventHandler('TMC:Server:OnPlayerUnload', function(src)
+    local player = TMC.Functions.GetPlayer(src).PlayerData.citizenid
+    --print("player ", player)
+
+    for k,v in pairs(openWorldFields) do
+        --print("field player ", v.player)
+        if v.player == player then
+            print("found players field, starting reset timer")
+            openWorldFields[k].inUse = true
+            openWorldFields[k].runTimer = true
+            openWorldFields[k].save = true
+        end
+    end
+
+    if playerWithDropOff == src then
+        playerWithDropOff = nil
+    end
+
+    if tablefind(playerQueue, src) then
+        --print("found player in queue table in leave queue")
+        table.remove(playerQueue, tablefind(playerQueue, src))
+        finishcashdropoff = false
+        TriggerClientEvent('drugs:cokedropofffail', src)
+    else
+        finishcashdropoff = false
+        TriggerClientEvent('drugs:cokedropofffail', src)
+    end
+    if playerWithDropOff == nil then
+        findNextInQueue()
+    end
+end)
+
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 function startFieldFrozenTimer(field)
@@ -334,9 +373,11 @@ end
 
 function findNextInQueue()
     if playerQueue[1] ~= nil then
-        --print('find next in queue playerqueue not nil')
+        print('find next in queue playerqueue not nil')
+        print('Next in Queue: ', playerQueue[1])
         playerWithDropOff = playerQueue[1]
         TriggerClientEvent('drugs:cokesendDropOff', playerQueue[1])
+        Wait(500)
         cashBinTimer(playerWithDropOff)
         table.remove(playerQueue, 1)
     else
@@ -464,6 +505,10 @@ Citizen.CreateThread(function()
 				cokefield[v.field][v.pos] = nil
 				cooldown[k] = nil
                 fieldCounts[k] = 0
+                if fieldUpdateRunning == false then
+                    FieldUpdateTick()
+                end
+                Wait(300)
 				TriggerClientEvent("drugs:cokefieldUpdateFieldData", -1, cokefield) -- update
 			end
 		end
@@ -490,6 +535,9 @@ Citizen.CreateThread(function()
 end)
 
 TMC.Functions.RegisterServerEvent("drugs:cokeResetFieldCount", function(src, field)
+    if fieldUpdateRunning == false then
+        FieldUpdateTick()
+    end
     fieldCounts[field] = 0
 end)
 
@@ -657,6 +705,9 @@ TMC.Functions.RegisterServerEvent('drugs:cokecompleteHarvest', function(src, zon
         table.insert(cooldown, {field = zone, pos = pos, time = GetGameTimer()})
         cokefield[zone][pos].status = "harvested"
         TriggerClientEvent("drugs:cokefieldUpdateFieldData", -1, cokefield)
+    end
+    if fieldUpdateRunning == false then
+        FieldUpdateTick()
     end
 end)
 
