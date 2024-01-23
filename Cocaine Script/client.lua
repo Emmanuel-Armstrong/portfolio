@@ -109,7 +109,7 @@ Citizen.CreateThread(function()
                     TMC.Functions.SimpleNotify("We'll be in touch.", 'speech')
                     Citizen.Wait(600)
                     TMC.Functions.TriggerServerEvent('drugs:cokequeue', 'joinqueue')
-                    Citizen.Wait(400)
+                    Citizen.Wait(600)
                     --print('inqueue: ', inQueue)
                 end
             end,
@@ -1018,7 +1018,7 @@ RegisterNetEvent("drugs:cokeStartGroupHarvest", function(pos, amount) -- ld code
             Citizen.Wait(500)
         else
             ClearPedTasks(PlayerPedId())
-			BJCore.Functions.Notify("Cancelled", "error")
+			TMC.Functions.SimpleNotify("Cancelled", "error")
         end
         StopAnimTask(playerPedId, 'amb@world_human_gardener_plant@male@base')
         TMC.Functions.ShowPromptGroup(cokeFieldPromptGroup)
@@ -2205,18 +2205,22 @@ function startLabBag(jobType)
             if TMC.IsDev then
                 print("brick purity: ", purity)
             end
-
-            TMC.Functions.TriggerServerEvent("TMC:Server:RemoveItem", 'rawcoke', 1, cokeid, cokeindex)
-            for i = 1, 19 do
+            if pureCount < 20 then
+                TMC.Functions.SimpleNotify('You don\'t have enough raw coke of the same purity to brick', 'inform')
+                return
+            else
                 TMC.Functions.TriggerServerEvent("TMC:Server:RemoveItem", 'rawcoke', 1, cokeid, cokeindex)
-            end
-                TMC.Functions.TriggerServerEvent("TMC:Server:RemoveItem", 'packingbox', 1)
-                local itemData = {
-                    quality = purity,
-                    creator = LocalPlayer.state.citizenid
-                }
-                TMC.Functions.TriggerServerEvent('TMC:Server:AddItem', 'coke_brick', 1, nil, itemData)
-                randomRepChance('cokeproduction', 90)
+                for i = 1, 19 do
+                    TMC.Functions.TriggerServerEvent("TMC:Server:RemoveItem", 'rawcoke', 1, cokeid, cokeindex)
+                end
+                    TMC.Functions.TriggerServerEvent("TMC:Server:RemoveItem", 'packingbox', 1)
+                    local itemData = {
+                        quality = purity,
+                        creator = LocalPlayer.state.citizenid
+                    }
+                    TMC.Functions.TriggerServerEvent('TMC:Server:AddItem', 'coke_brick', 1, nil, itemData)
+                    randomRepChance('cokeproduction', 90)
+                end
             end
             ClearPedTasksImmediately(playerPedId)
             TMC.Functions.ShowPromptGroup(cokeLabBagPrompt)
@@ -2328,7 +2332,9 @@ function BinCleanUp()
         if dropOffBinZone then
             TMC.Functions.RemoveZoneById(dropOffBinZone.id)
         end
-        TMC.Functions.RemoveZoneById(dropOffPZ.id)
+        if dropOffPZ then
+            TMC.Functions.RemoveZoneById(dropOffPZ.id)
+        end
     end)
 end
 
@@ -2397,18 +2403,20 @@ RegisterNetEvent('drugs:cokeLabInfoUpdate', function(data)
 end)
 
 RegisterNetEvent('drugs:cokesendDropOff', function()
-    --print('in send dropoff')
+    print('in send dropoff')
     GiveDropOff()
 end)
 
 RegisterNetEvent('drugs:cokedropofffail', function()
+    if HasDropOff == true then
+        local message = 'Shame, I was looking foward to working with you. Guess we will talk about this later. Wait a while before coming back.'
+        phoneNotify(message, 1000 * 15)
+    end
+    BinCleanUp()
+    BlipCleanFunction('DropOff')
     HasDropOff = false
     inQueue = false
     dropOffSuccess = false
-    local message = 'Shame, I was looking foward to working with you. Guess we will talk about this later. Wait a while before coming back.'
-    phoneNotify(message, 1000 * 15)
-    BinCleanUp()
-    BlipCleanFunction('DropOff')
     Citizen.Wait(300)
 end)
 
