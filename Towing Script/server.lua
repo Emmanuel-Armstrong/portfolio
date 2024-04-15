@@ -30,7 +30,7 @@ TMC.Functions.RegisterServerEvent('jobs:towing:towPayout', function(src, lostTow
             totalAmount = (Config.Towing.basepay * Config.Towing.StartLocations[jobTier].PayMultiplier * (partyInfo.data.carsTowed - partyInfo.data.superCount) * partyInfo.playerCount - Config.Towing.deposit)
             if partyInfo.data.superCount > 0 then
                 for i = 0, partyInfo.data.superCount, 1 do
-                    totalAmount = totalAmount + (Config.Towing.basepay * (Config.Towing.StartLocations[jobTier].PayMultiplier + 0.5))
+                    totalAmount = totalAmount + (Config.Towing.basepay * (Config.Towing.StartLocations[jobTier].PayMultiplier + 0.4))
                 end
             end
             payoutPerPlayer = totalAmount / partyInfo.playerCount
@@ -38,7 +38,7 @@ TMC.Functions.RegisterServerEvent('jobs:towing:towPayout', function(src, lostTow
             totalAmount = (Config.Towing.basepay * Config.Towing.StartLocations[jobTier].PayMultiplier * (partyInfo.data.carsTowed - partyInfo.data.superCount) * partyInfo.playerCount)
             if partyInfo.data.superCount > 0 then
                 for i = 0, partyInfo.data.superCount, 1 do
-                    totalAmount = totalAmount + (Config.Towing.basepay * (Config.Towing.StartLocations[jobTier].PayMultiplier + 0.5))
+                    totalAmount = totalAmount + (Config.Towing.basepay * (Config.Towing.StartLocations[jobTier].PayMultiplier + 0.4))
                 end
             end
             payoutPerPlayer = totalAmount / partyInfo.playerCount
@@ -142,13 +142,6 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyVehicleStats", fun
     end
 end)
 
-TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyInZone", function(source, partyId, b)
-    local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
-    Wait(700)
-    for k,v in pairs(partyInfo.members) do
-		TriggerClientEvent("towing:client:setInZone", k, b)
-    end
-end)
 
 TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyRestockVariables", function(source, partyId, veh)
     local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
@@ -158,74 +151,6 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyRestockVariables",
     end
 end)
 
-TMC.Functions.RegisterServerEvent("jobs:towing:server:showPartyPrompt", function(source, partyId, starter, towStep)
-    local b = false
-    local count = 0
-    if not partyId then
-        local partyId = Player(source).state.party
-    end
-    local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
-    Wait(700)
-
-    for k,v in pairs(partyInfo.members) do
-        count = count + 1
-    end
-
-    if count < 2 then
-        b = true
-        TriggerClientEvent("towing:client:showPrompt", source, b, towStep)
-    else
-        for k,v in pairs(partyInfo.members) do
-            if k ~= starter then
-                b = true
-            else
-                b = false
-            end
-            TriggerClientEvent("towing:client:showPrompt", k, b, towStep)
-        end
-    end
-
-end)
-
-TMC.Functions.RegisterServerEvent("jobs:towing:server:showPartyNotify", function(source, partyId)
-    local count = 0
-    if not partyId then
-        local partyId = Player(source).state.party
-    end
-    local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
-    Wait(300)
-
-    for k,v in pairs(partyInfo.members) do
-        count = count + 1
-    end
-    local b = true
-
-    if count > 1 then
-        for k,v in pairs(partyInfo.members) do
-            TriggerClientEvent("towing:client:showNotify", k, b)
-        end
-    end
-
-end)
-
-TMC.Functions.RegisterServerEvent("jobs:towing:server:showPartyBlip", function(source, partyId, starter)
-    local b = false
-
-    if not partyId then
-        local partyId = Player(source).state.party
-    end
-
-    local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
-    Wait(700)
-    for k,v in pairs(partyInfo.members) do
-        if k == starter then
-            b = true
-        else
-            b = false
-        end
-        TriggerClientEvent("towing:client:showBlip", k, b, starter)
-    end
-end)
 
 TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyStarter", function(source, partyId, curTow, starter)
     if not partyId then
@@ -233,9 +158,15 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyStarter", function
     end
 
     local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
-    Wait(300)
+    Wait(700)
+
+    local count = 0
     for k,v in pairs(partyInfo.members) do
-        TriggerClientEvent("towing:client:setStarter", k, curTow, starter)
+        count = count + 1
+    end
+
+    for k,v in pairs(partyInfo.members) do
+        TriggerClientEvent("towing:client:setStarter", k, curTow, starter, count)
     end
 end)
 
@@ -248,7 +179,7 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:attachPartyVehicle", funct
     end
 
     local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
-    Wait(300)
+    Wait(700)
 
 
     for k,v in pairs(partyInfo.members) do
@@ -256,9 +187,7 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:attachPartyVehicle", funct
     end
 
     for k,v in pairs(partyInfo.members) do
-        if count < 2 then
-            b = false
-        elseif k == starter then
+        if k == starter then
             b = true
         else
             b = false
@@ -282,9 +211,7 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:detachPartyVehicle", funct
     end
 
     for k,v in pairs(partyInfo.members) do
-        if count < 2 then
-            b = false
-        elseif k == starter then
+        if k == starter then
             b = true
         else
             b = false
