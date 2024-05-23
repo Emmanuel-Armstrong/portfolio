@@ -81,7 +81,7 @@ Citizen.CreateThread(function()
 	GlobalState.VehicleTowingZonesInUse = ZoneInUse
 end)
 
-TMC.Functions.RegisterServerEvent("jobs:towing:manageZoneInUse", function(source, zone, partyId, b)
+TMC.Functions.RegisterServerCallback("jobs:towing:manageZoneInUse", function(source, cb, zone, partyId, b)
 	local zoneData = TMC.Common.CopyTable(GlobalState.VehicleTowingZonesInUse)
     if type(zone) == 'table' then
         for k,v in pairs(zone) do
@@ -91,6 +91,7 @@ TMC.Functions.RegisterServerEvent("jobs:towing:manageZoneInUse", function(source
         zoneData = ZoneCleanUp(zoneData, zone, source, partyId, b)
     end
 	GlobalState.VehicleTowingZonesInUse = zoneData
+    cb(true)
 end)
 
 function ZoneCleanUp(zoneData,zone,source,partyId,b)
@@ -107,12 +108,14 @@ function ZoneCleanUp(zoneData,zone,source,partyId,b)
     return zoneData
 end
 
-TMC.Functions.RegisterServerEvent("jobs:towing:createPartyImpoundZones", function(source, partyId)
+TMC.Functions.RegisterServerCallback("jobs:towing:createPartyImpoundZones", function(source, cb, partyId)
     local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
     Wait(700)
     for k,v in pairs(partyInfo.members) do
 		TriggerClientEvent("towing:client:createImpoundZones", k)
     end
+
+    cb(true)
 end)
 
 TMC.Functions.RegisterServerEvent("jobs:towing:removePartyImpoundZones", function(source, partyId)
@@ -125,23 +128,34 @@ TMC.Functions.RegisterServerEvent("jobs:towing:removePartyImpoundZones", functio
     end
 end)
 
-TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyVehicles", function(source, partyId, curTow, curStart, towV, veh)
+TMC.Functions.RegisterServerCallback("jobs:towing:server:setPartyVehicles", function(source, cb, partyId, curTow, curStart, towV, veh)
     local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
     Wait(700)
     for k,v in pairs(partyInfo.members) do
 		TriggerClientEvent("towing:client:setVehicles", k, curTow, curStart, towV, veh)
     end
+    cb(true)
 end)
 
-TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyVehicleStats", function(source, partyId, veh, vin, hasCar)
+TMC.Functions.RegisterServerCallback("jobs:towing:server:setPartyVehicleStats", function(source, cb, partyId, veh, vin, hasCar)
     local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
     Wait(700)
     for k,v in pairs(partyInfo.members) do
         TriggerClientEvent("towing:client:setVehicleStats", k, veh, hasCar)
         TriggerClientEvent('vehiclelock:client:setLockStatus', k, vin, false, 'outside', true)
     end
+
+    cb(true)
 end)
 
+TMC.Functions.RegisterServerCallback("jobs:towing:server:setPartyStats", function(source, cb, partyId, hasCar, carsTowed, superCount)
+    local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
+    Wait(700)
+    for k,v in pairs(partyInfo.members) do
+        TriggerClientEvent("towing:client:setStats", k, hasCar, carsTowed, superCount)
+    end
+    cb(true)
+end)
 
 TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyRestockVariables", function(source, partyId, veh)
     local partyInfo = TMC.Common.CopyTable(GlobalState['Party:'..tostring(partyId)])
@@ -152,7 +166,7 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyRestockVariables",
 end)
 
 
-TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyStarter", function(source, partyId, curTow, starter)
+TMC.Functions.RegisterServerCallback("jobs:towing:server:setPartyStarter", function(source, cb, partyId, curTow, starter)
     if not partyId then
         local partyId = Player(source).state.party
     end
@@ -168,10 +182,12 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:setPartyStarter", function
     for k,v in pairs(partyInfo.members) do
         TriggerClientEvent("towing:client:setStarter", k, curTow, starter, count)
     end
+    
+    cb(true)
 end)
 
-
 TMC.Functions.RegisterServerEvent("jobs:towing:server:attachPartyVehicle", function(source, partyId, curStart, starter)
+
     local b = false
     local count = 0
     if not partyId then
@@ -193,6 +209,7 @@ TMC.Functions.RegisterServerEvent("jobs:towing:server:attachPartyVehicle", funct
             b = false
         end
 		TriggerClientEvent("towing:client:attachVehicle", k, b, curStart, count)
+        Wait (300)
     end
 end)
 
