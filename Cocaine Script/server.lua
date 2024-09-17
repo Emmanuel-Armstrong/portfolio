@@ -5,6 +5,8 @@ local openWorldBarrelsForClients = {}
 local openWorldFields = {}
 local openWorldFieldsForClients = {}
 local fieldUpdateRunning = false
+local doorUnlocked = false
+local resetTime = 35
 local cokefield = {
     [1] = {},
     [2] = {},
@@ -17,147 +19,54 @@ local fieldCounts = {
     [3] = 0,
     [4] = 0,
 }
-local finishcashdropoff = false
+
+local finishCashDropoff, finishKeyQuest = false, false
 
 Citizen.CreateThread(function()
     while TMC == nil do
         Citizen.Wait(1000)
     end
-end)
+    doorUnlocked = Config.Cocaine.Labs[2].Unlocked
 
-TMC.Functions.RegisterServerEvent('drugs:cokesenddroplocation', function(src, area)
-    finishcashdropoff = false
-    local player = TMC.Functions.GetPlayer(src)
-    local phoneNumber = player.PlayerData.charinfo.phone
-    local sender = 'Unknown'
-    local subject = 'Dead Drop'
-    local message = 'Hey. <br><br>Get the rolls over to one of my dead drops, it should be around the ' .. Config.Cocaine.DropOffLocations[area].area_name .. ' area. <br><br>I\'ve set a GPS marker to around the area. Just have a look and we will be in touch!'
-    exports['tmc_phone']:SendEmail(phoneNumber, sender, subject, message)
-end)
+    GlobalState.CocaineStartPed = os.date("%A")
 
-TMC.Functions.RegisterServerEvent('drugs:cokesendharvestorder', function(src, field)
-    local player = TMC.Functions.GetPlayer(src)
-    local phoneNumber = player.PlayerData.charinfo.phone
-    local sender = 'Unknown'
-    local subject = 'Harvesting Order'
-    local message = 'Hey. <br><br>I got word that a Field is ready to harvest. <br><br>Go over to Cayo Perico and make sure you bring the right equipment. <br><br>The right field should be Field #' .. field .. '. <br><br>I wouldn\'t touch the other fields, otherwise some people might not be so happy!'
-    exports['tmc_phone']:SendEmail(phoneNumber, sender, subject, message)
-end)
+    --coke barrel update code -------------------------------------------------------------------------------------------
+    GlobalState.openWorldBarrelsReady = false
+    TMC.Functions.ExecuteSqlSync('SELECT id, zone, data, pureity FROM cokebarrels WHERE `openWorld` = 1', {}, function(barrels)
+        if barrels and barrels[1] ~= nil then
+            --print("In barrels if statement")
+            for k,v in pairs(barrels) do
+                --print("in pairs of barrels for loop")
+                v.data = TMC.Common.Decode(v.data)
+                --print("Decoded v.data", v.data)
+                if not openWorldBarrels[v.zone] then
+                    openWorldBarrels[v.zone] = {}
+                end
 
-TMC.Functions.RegisterServerEvent('drugs:cokequeue', function(src, status)
-    if status == 'joinqueue' then
+                --print("inserting into opernWorldBarrels")
+                openWorldBarrels[v.zone][v.id] = v.data
+                --print("openWorldBarrels[v.zone][v.id]", openWorldBarrels[v.zone][v.id])
+                openWorldBarrels[v.zone][v.id].save = false
+                --print("openWorldBarrels[v.zone][v.id]", openWorldBarrels[v.zone][v.id])
 
-        if not playerWithDropOff then
-            playerWithDropOff = src
-        end
-
-        local allFieldsFull = true
-        for k,v in pairs(openWorldFields) do
-            --print(v.inUse)
-            if v.inUse == false and v.frozen == false then
-                allFieldsFull = false
-                break
+                if not openWorldBarrelsForClients[v.zone] then
+                    openWorldBarrelsForClients[v.zone] = {}
+                end
+                --print("setting openworldbarrelsforclients")
+                openWorldBarrelsForClients[v.zone][v.id] = {
+                    coords = v.data.coords,
+                    progress = v.data.progress,
+                    barrel = v.data.barrel,
+                    quality = v.data.quality
+                }
             end
         end
+        GlobalState.openWorldBarrelsReady = true
+    end)
+    BarrelUpdateTick()
 
-
-        Citizen.Wait(900)
-        print("player with drop off: ", playerWithDropOff)
-        if (playerWithDropOff and playerWithDropOff ~= src) or allFieldsFull == true then
-            print('inserting into playerqueue dropoff or field not nil')
-            table.insert(playerQueue, src)
-            if allFieldsFull == true then
-                TMC.Functions.SimpleNotify(src, "All Fields are currently claimed. You're in the system so just hang out and we\'ll get you sorted once one is open.", "info", 20000)
-            else
-                TMC.Functions.SimpleNotify(src, "There are already people in line waiting for a drop off. You are number " ..#playerQueue.. " in line. Hang tight.", "info", 20000)
-            end
-        else
-            print('no queue, sending dropoff')
-            playerWithDropOff = src
-            cashBinTimer(src)
-            Wait(1000)
-            TriggerClientEvent('drugs:cokesendDropOff', src)
-        end
-    elseif status == 'leavequeue' then
-        --print("in leavequeue")
-        if playerWithDropOff == src then
-            playerWithDropOff = nil
-        end
-
-        if tablefind(playerQueue, src) then
-            --print("found player in queue table in leave queue")
-            table.remove(playerQueue, tablefind(playerQueue, src))
-            finishcashdropoff = false
-            TriggerClientEvent('drugs:cokedropofffail', src)
-        else
-            finishcashdropoff = false
-            TriggerClientEvent('drugs:cokedropofffail', src)
-        end
-        if playerWithDropOff == nil then
-            findNextInQueue()
-        end
-    end
-end)
-
-TMC.Functions.RegisterServerEvent('drugs:cokegivefield', function(src, player, status)
-    --print("status", status)
-    local playerId = TMC.Functions.GetPlayer(src).PlayerData.citizenid
-    if status then
-        Citizen.Wait(200)
-        finishcashdropoff = true
-        local fieldRandom = TMC.Common.TrueRandom(1,4)
-        local foundField = false
-        while foundField == false do
-            if openWorldFields[fieldRandom].inUse == false and openWorldFields[fieldRandom].frozen == false then
-                openWorldFields[fieldRandom].inUse = true
-                openWorldFields[fieldRandom].player = playerId
-                openWorldFields[fieldRandom].wasEntered = false
-                openWorldFields[fieldRandom].timer = 0
-                openWorldFields[fieldRandom].runTimer = true
-                foundField = true
-            else
-                fieldRandom = TMC.Common.TrueRandom(1,4)
-            end
-            Citizen.Wait(200)
-        end
-        --print('player assigned field:', openWorldFields[fieldRandom].player)
-        --print('field assigned', fieldRandom)
-
-        playerWithDropOff = nil
-        TriggerClientEvent('drugs:cokefieldsendinfo', src, fieldRandom, 140000)
-        --TriggerClientEvent('drugs:cokefieldsendinfo', src, fieldRandom, 1000) -- USED FOR DEV TESTING
-        for k,v in pairs(openWorldFields) do
-            if v.inUse == false and v.frozen == false then
-                print("finding next in queue")
-                findNextInQueue()
-                break
-            end
-        end
-        fieldRandom = nil
-    elseif status == false then
-        local field = nil
-        for k,v in pairs(openWorldFields) do
-            if v.player == playerId or v.player == src then
-                openWorldFields[k].inUse = false
-                openWorldFields[k].wasEntered = false
-                openWorldFields[k].timer = 0
-                openWorldFields[k].runTimer = false
-                openWorldFields[fieldRandom].player = nil
-                Citizen.Wait(200)
-                --print("should be false :", openWorldFields[k].inUse)
-                --print('k,v', k, v)
-                field = k
-            end
-        end
-        startFieldFrozenTimer(field)
-    end
-end)
-
---Coke Field Code NEW
---------------------------------------------------------------------------------------------------------------------------------------------------------
-Citizen.CreateThread(function()
+    --coke field update code -------------------------------------------------------------------------------------------
     GlobalState.openWorldFieldsReady = false
-    --print("Should select from cokefields")
     TMC.Functions.ExecuteSqlSync('SELECT id, fieldNum, timer, inUse, player, frozen, wasEntered, runTimer FROM cokefields', {}, function(fields)
         if fields and fields[1] ~= nil then
             --print("In fields if statement")
@@ -225,19 +134,157 @@ Citizen.CreateThread(function()
         GlobalState.openWorldFieldsReady = true
     end)
     FieldUpdateTick()
+
+    while true do
+		local nextCokeUpdate = os.date("%A")
+    	if GlobalState.CocaineStartPed ~= nextCokeUpdate then
+			GlobalState.CocaineStartPed = nextCokeUpdate -- only update state bag if it has changed
+		end
+        
+        SaveCokeBarrels()
+        SaveCokeFields()
+        Citizen.Wait(2*60*1000) -- save every 2 mins
+    end
 end)
 
+TMC.Functions.RegisterServerEvent('drugs:cokesenddroplocation', function(src, area)
+    finishCashDropoff = false
+    local player = TMC.Functions.GetPlayer(src)
+    local phoneNumber = player.PlayerData.charinfo.phone
+    local sender = 'Unknown'
+    local subject = 'Dead Drop'
+    local message = 'Hey. <br><br>Get the rolls over to one of my dead drops, it should be around the ' .. Config.Cocaine.DropOffLocations[area].area_name .. ' area. <br><br>I\'ve set a GPS marker to around the area. Just have a look and we will be in touch!'
+    exports['tmc_phone']:SendEmail(phoneNumber, sender, subject, message)
+end)
+
+TMC.Functions.RegisterServerEvent('drugs:cokesendharvestorder', function(src, field)
+    local player = TMC.Functions.GetPlayer(src)
+    local phoneNumber = player.PlayerData.charinfo.phone
+    local sender = 'Unknown'
+    local subject = 'Harvesting Order'
+    local message = 'Hey. <br><br>I got word that a Field is ready to harvest. <br><br>Go over to Cayo Perico and make sure you bring the right equipment. <br><br>The right field should be Field #' .. field .. '. <br><br>I wouldn\'t touch the other fields, otherwise some people might not be so happy!'
+    exports['tmc_phone']:SendEmail(phoneNumber, sender, subject, message)
+end)
+
+TMC.Functions.RegisterServerEvent('drugs:cokequeue', function(src, status)
+    if status == 'joinqueue' then
+
+        if not playerWithDropOff then
+            playerWithDropOff = src
+        end
+
+        local allFieldsFull = true
+        for k,v in pairs(openWorldFields) do
+            --print(v.inUse)
+            if v.inUse == false and v.frozen == false then
+                allFieldsFull = false
+                break
+            end
+        end
+
+
+        Citizen.Wait(900)
+        print("player with drop off: ", playerWithDropOff)
+        if (playerWithDropOff and playerWithDropOff ~= src) or allFieldsFull == true then
+            print('inserting into playerqueue dropoff or field not nil')
+            table.insert(playerQueue, src)
+            if allFieldsFull == true then
+                TMC.Functions.SimpleNotify(src, "All Fields are currently claimed. You're in the system so just hang out and we\'ll get you sorted once one is open.", "info", 20000)
+            else
+                TMC.Functions.SimpleNotify(src, "There are already people in line waiting for a drop off. You are number " ..#playerQueue.. " in line. Hang tight.", "info", 20000)
+            end
+        else
+            print('no queue, sending dropoff')
+            playerWithDropOff = src
+            cashBinTimer(src)
+            Wait(1000)
+            TriggerClientEvent('drugs:cokesendDropOff', src)
+        end
+    elseif status == 'leavequeue' then
+        --print("in leavequeue")
+        if playerWithDropOff == src then
+            playerWithDropOff = nil
+        end
+
+        if tablefind(playerQueue, src) then
+            print("found player in queue table in leave queue")
+            table.remove(playerQueue, tablefind(playerQueue, src))
+            finishCashDropoff = false
+            TriggerClientEvent('drugs:cokedropofffail', src)
+        else
+            print("didn't find player in queue table")
+            finishCashDropoff = false
+            TriggerClientEvent('drugs:cokedropofffail', src)
+        end
+        if playerWithDropOff == nil then
+            findNextInQueue()
+        end
+    end
+end)
+
+TMC.Functions.RegisterServerEvent('drugs:cokegivefield', function(src, player, status, fromClient, fieldIn)
+    --print("status", status)
+    local playerId
+    if fromClient then
+        playerId = TMC.Functions.GetPlayer(src).PlayerData.citizenid
+    else
+        playerId = player.PlayerData.citizenid
+    end
+    
+    if status then
+        Citizen.Wait(200)
+        finishCashDropoff = true
+        local fieldRandom = TMC.Common.TrueRandom(1,4)
+        local foundField = false
+        while foundField == false do
+            if openWorldFields[fieldRandom].inUse == false and openWorldFields[fieldRandom].frozen == false then
+                openWorldFields[fieldRandom].inUse = true
+                openWorldFields[fieldRandom].player = playerId
+                openWorldFields[fieldRandom].wasEntered = false
+                openWorldFields[fieldRandom].timer = 0
+                openWorldFields[fieldRandom].runTimer = true
+                foundField = true
+            else
+                fieldRandom = TMC.Common.TrueRandom(1,4)
+            end
+            Citizen.Wait(200)
+        end
+        --print('player assigned field:', openWorldFields[fieldRandom].player)
+        --print('field assigned', fieldRandom)
+
+        playerWithDropOff = nil
+        TriggerClientEvent('drugs:cokefieldsendinfo', src, fieldRandom, 140000)
+        --TriggerClientEvent('drugs:cokefieldsendinfo', src, fieldRandom, 1000) -- USED FOR DEV TESTING COMMENT OUT WHEN DONE
+        for k,v in pairs(openWorldFields) do
+            if v.inUse == false and v.frozen == false then
+                print("finding next in queue")
+                findNextInQueue()
+                break
+            end
+        end
+        fieldRandom = nil
+    elseif status == false then
+        local field = fieldIn
+        openWorldFields[field].inUse = false
+        openWorldFields[field].wasEntered = false
+        openWorldFields[field].timer = 0
+        openWorldFields[field].runTimer = false
+        openWorldFields[field].player = nil
+        Citizen.Wait(200)
+        --print("should be false :", openWorldFields[field].inUse)
+        startFieldFrozenTimer(field)
+    end
+end)
+
+--Coke Field Code NEW
+--------------------------------------------------------------------------------------------------------------------------------------------------------
 function FieldUpdateTick()
-    Citizen.CreateThread(function()
-        Citizen.Wait(60*1000)
-    end)
     Citizen.CreateThread(function()
         while true do
             fieldUpdateRunning = false
             --print("in field update tick logic")
             for k,v in pairs(openWorldFields) do
                 if openWorldFields[k].runTimer == true then
-                    --print("run timer = true in update tick")
                     if (openWorldFields[k].inUse == true and openWorldFields[k].wasEntered == false) then
                         local progress = openWorldFields[k].timer
                         if progress < 45 then
@@ -279,9 +326,12 @@ function FieldUpdateTick()
     end)
 end
 
-TMC.Functions.RegisterServerEvent('drugs:cokeresetfieldtimer', function(src, field, inUse)
+TMC.Functions.RegisterServerEvent('drugs:cokeresetfieldtimer', function(src, field, inUse, partnerRep)
     local harvestrep
     local playersrc = TMC.Functions.GetPlayer(src)
+    while not playersrc do
+        Wait(10)
+    end
     if playersrc.PlayerData.rep['cokeharvest'] > 2250 then
         harvestrep = 2250
     else
@@ -290,12 +340,22 @@ TMC.Functions.RegisterServerEvent('drugs:cokeresetfieldtimer', function(src, fie
 
     local maxFields = 0
     for k,v in pairs(Config.Cocaine['Options']['MaxHarvestZones'][field]) do
-        if v[1] >= harvestrep then
-            maxFields = v[2]
-            --print("harvest rep:", harvestrep)
-            --print("k:", k)
-            --print('maxFields value:', maxFields)
-            break
+        if (harvestrep > partnerRep) then
+            if v[1] >= harvestrep then
+                maxFields = v[2]
+                --print("harvest rep:", harvestrep)
+                --print("k:", k)
+                --print('maxFields value:', maxFields)
+                break
+            end
+        else
+            if v[1] >= partnerRep then
+                maxFields = v[2]
+                --print("partner rep:", partnerRep)
+                --print("k:", k)
+                --print('maxFields value:', maxFields)
+                break
+            end
         end
     end
 
@@ -346,10 +406,10 @@ AddEventHandler('TMC:Server:OnPlayerUnload', function(src)
     if tablefind(playerQueue, src) then
         --print("found player in queue table in leave queue")
         table.remove(playerQueue, tablefind(playerQueue, src))
-        finishcashdropoff = false
+        finishCashDropoff = false
         TriggerClientEvent('drugs:cokedropofffail', src)
     else
-        finishcashdropoff = false
+        finishCashDropoff = false
         TriggerClientEvent('drugs:cokedropofffail', src)
     end
     if playerWithDropOff == nil then
@@ -360,14 +420,33 @@ end)
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 function startFieldFrozenTimer(field)
-    openWorldFields[field].frozen = true
-    openWorldFields[field].save = true
-    SetTimeout(1000 * 60 * 20, function()
-        openWorldFields[field].frozen = false
+    Citizen.CreateThread(function()
+        print("frozentimer started for field, ", field)
+        openWorldFields[field].frozen = true
         openWorldFields[field].save = true
-        if playerWithDropOff == nil then
-            findNextInQueue()
-        end
+        SetTimeout(1000 * 60 * resetTime, function()
+            openWorldFields[field].frozen = false
+            openWorldFields[field].save = true
+            print("saving coke fields")
+            SaveCokeFields()
+            if playerWithDropOff == nil then
+                findNextInQueue()
+            end
+
+            for k,v in pairs(cooldown) do
+                if v.field == field then
+                    --print("If newest is older than resetTime run this code ")
+                    cokefield[v.field][v.pos] = nil
+                    cooldown[k] = nil
+                    fieldCounts[field] = 0
+                    if fieldUpdateRunning == false then
+                        FieldUpdateTick()
+                    end
+                    Wait(300)
+                    TriggerClientEvent("drugs:cokefieldUpdateFieldData", -1, cokefield) -- update
+                end
+            end
+        end)
     end)
 end
 
@@ -385,15 +464,43 @@ function findNextInQueue()
     end
 end
 
+------------------------------------------------------TIMERS------------------------------------------------------------------------------------------------------
+
 function cashBinTimer(src)
     SetTimeout(1000 * 60 * 13, function()
         --print('cashbintimer set timeout')
-        if finishcashdropoff == false then
+        if finishCashDropoff == false then
+            playerWithDropOff = nil
             findNextInQueue()
             TriggerClientEvent('drugs:cokedropofffail', src)
         end
     end)
 end
+
+TMC.Functions.RegisterServerEvent('drugs:cokeKeyQuestTimer', function(src)
+    SetTimeout(1000 * 60 * 30, function()
+        if finishKeyQuest == false then
+            TriggerClientEvent('drugs:cokekeyquestfail', src)
+        end
+    end)
+end)
+
+---------------------------------------------------------------------------------------------------------------------------------
+
+TMC.Functions.RegisterServerEvent('drugs:cokeSetKeyQuestFinished', function(src)
+    finishKeyQuest = true
+end)
+
+TMC.Functions.RegisterServerCallback('drugs:cokeCheckMoney', function(src, cb)
+    local player = TMC.Functions.GetPlayer(src)
+    local cash = player.Functions.GetMoney("cash")
+    cb(cash)
+end)
+
+TMC.Functions.RegisterServerEvent('drugs:cokeRemoveMoney', function(src)
+    local player = TMC.Functions.GetPlayer(src)
+    player.Functions.RemoveMoney("cash", 500000, "Mysterious Key Purchase")
+end)
 
 TMC.Functions.RegisterServerEvent('drugs:cokezoneregister', function(src, zone, enter)
     --print("entered cokezoneregister")
@@ -452,14 +559,16 @@ end)
 TMC.Functions.RegisterServerCallback('drugs:cokezonecallback', function(src, cb, zone, pos)
     local ownerInField = false
     local playerId = TMC.Functions.GetPlayer(src).PlayerData.citizenid
-    if playersInField[zone].count >= Config.Cocaine.Options.RequiredFieldPlayers then
+    if zone and playersInField[zone].count >= Config.Cocaine.Options.RequiredFieldPlayers then
         --print('zone', zone)
         --print('field owner id', openWorldFields[zone].player)
         --print('playerId: ', playerId)
         --print("field id: ", openWorldFields[zone].id)
-        for k,v in pairs(playersInField[zone])do
+        for k,v in pairs(playersInField[zone]) do
             --print("players in field k:", k)
+           -- print("field player: ", openWorldFields[zone].player)
             if k == openWorldFields[zone].player then
+                --print("should set ownerinfield")
                 ownerInField = true
                 --print('ownerInField', ownerInField)
                 break
@@ -467,12 +576,14 @@ TMC.Functions.RegisterServerCallback('drugs:cokezonecallback', function(src, cb,
         end
         if playersInField[zone][playerId] then
             if ownerInField then
+                --print("callback owner in field")
                 cb({
                     success = true,
                     hasAccess = true,
                     agro = 0
                 })
             else
+                --print("wrong field")
                 cb({
                     success = true,
                     hasAccess = false,
@@ -480,6 +591,7 @@ TMC.Functions.RegisterServerCallback('drugs:cokezonecallback', function(src, cb,
                 })
             end
         else
+            --print("callback good but no access")
             cb({
                 success = true,
                 hasAccess = false,
@@ -487,6 +599,7 @@ TMC.Functions.RegisterServerCallback('drugs:cokezonecallback', function(src, cb,
             })
         end
     else
+        --print("catchall fail")
         cb({
             success = false,
             hasAccess = false,
@@ -495,25 +608,6 @@ TMC.Functions.RegisterServerCallback('drugs:cokezonecallback', function(src, cb,
     end
 end)
 
-local resetTime = 45
-Citizen.CreateThread(function()
-	while true do
-		Citizen.Wait(60*1000)
-		for k,v in pairs(cooldown) do
-			if GetGameTimer() - v.time >= resetTime * 60 * 1000 then
-                --print("cooldown timer started")
-				cokefield[v.field][v.pos] = nil
-				cooldown[k] = nil
-                fieldCounts[k] = 0
-                if fieldUpdateRunning == false then
-                    FieldUpdateTick()
-                end
-                Wait(300)
-				TriggerClientEvent("drugs:cokefieldUpdateFieldData", -1, cokefield) -- update
-			end
-		end
-	end
-end)
 
 function randomRepChance(src, rep, percent)
     local randomNumber = TMC.Common.TrueRandom(1, 100)
@@ -522,18 +616,6 @@ function randomRepChance(src, rep, percent)
     end
 end
 
-Citizen.CreateThread(function()
-    GlobalState.CocaineStartPed = os.date("%A")
-
-    while true do
-    	Citizen.Wait(10000)
-		local nextCokeUpdate = os.date("%A")
-    	if GlobalState.CocaineStartPed ~= nextCokeUpdate then
-			GlobalState.CocaineStartPed = nextCokeUpdate -- only update state bag if it has changed
-		end
-    end
-end)
-
 TMC.Functions.RegisterServerEvent("drugs:cokeResetFieldCount", function(src, field)
     if fieldUpdateRunning == false then
         FieldUpdateTick()
@@ -541,7 +623,8 @@ TMC.Functions.RegisterServerEvent("drugs:cokeResetFieldCount", function(src, fie
     fieldCounts[field] = 0
 end)
 
-TMC.Functions.RegisterServerEvent("drugs:cokeAttemptLeafClip", function(source, pos, field, amount)
+
+TMC.Functions.RegisterServerEvent("drugs:cokeAttemptLeafClip", function(source, pos, field, amount, partnerRep)
     local found = false
 	local dist = 0
     local harvestDist = 0
@@ -553,65 +636,77 @@ TMC.Functions.RegisterServerEvent("drugs:cokeAttemptLeafClip", function(source, 
         harvestrep = player.PlayerData.rep['cokeharvest']
     end
     for k,v in pairs(Config.Cocaine['Options']['HarvestWidth']) do
-        if v[1] >= harvestrep then
-            harvestDist = v[2]
-            break
+        if harvestrep > partnerRep then
+            if v[1] >= harvestrep then
+                harvestDist = v[2]
+                break
+            end
+        else
+            if v[1] >= partnerRep then
+                harvestDist = v[2]
+                break
+            end
         end
     end
-	for k,v in pairs(cokefield[field]) do
-		dist = #(pos - v.pos)
-		if v.status == "harvested" then
-			if dist <= harvestDist then
-				found = k
-				break
-			end
-		elseif v.status == "pending" or "processing" then
-			if dist <= harvestDist then
-				found = k
-				break
-			end
-		end
-	end
-    if not openWorldFields[field].frozen then
-	    if not found then
-    		cokefield[field][pos] = {}
-	    	cokefield[field][pos].group = {}
-		    table.insert(cokefield[field][pos].group, source)
-		    cokefield[field][pos].groupStatus = {}
-		    cokefield[field][pos].status = "pending"
-		    cokefield[field][pos].pos = pos
-		    TriggerClientEvent("drugs:cokefieldUpdateFieldData", -1, cokefield)
-		    TriggerClientEvent("drugs:cokefieldPendingGroupHarvest", source, pos)
-	    else
-    		if cokefield[field][found].status == "pending" then
-			    if dist <= harvestDist then
-    				if cokefield[field][found].group ~= nil and cokefield[field][found].group[1] ~= nil then
-                        Citizen.Wait(200)
-					    table.insert(cokefield[field][found].group, source)
-					    for i = 1, #cokefield[field][found].group, 1 do
-    						cokefield[field][found].status = "processing"
-						    TriggerClientEvent("drugs:cokeStartGroupHarvest", cokefield[field][found].group[i], found, amount)
-					    end
-					    TriggerClientEvent("drugs:cokefieldUpdateFieldData", -1, cokefield)
-				    end
-			    else
-    				TMC.Functions.SimpleNotify(source, "You can't harvest this close to a pending harvest", "error")
-                    TriggerClientEvent("drugs:cokefieldShowPromptGroup", source)
+    if field then
+    	for k,v in pairs(cokefield[field]) do
+	    	dist = #(pos - v.pos)
+		    if v.status == "harvested" then
+    			if dist <= harvestDist then
+	    			found = k
+		    		break
 			    end
-		    elseif cokefield[field][found].status == "harvested" then
-    			TMC.Functions.SimpleNotify(source, 'This area was recently harvested', 'error')
-                TriggerClientEvent("drugs:cokefieldShowPromptGroup", source)
-		    elseif cokefield[field][found].status == "processing" then
-    			TMC.Functions.SimpleNotify(source, 'This area is currently being processed', 'error')
-                TriggerClientEvent("drugs:cokefieldShowPromptGroup", source)
+		    elseif v.status == "pending" or "processing" then
+			    if dist <= harvestDist then
+				    found = k
+				    break
+			    end
 		    end
 	    end
+
+        if not openWorldFields[field].frozen then
+	        if not found then
+    		    cokefield[field][pos] = {}
+	    	    cokefield[field][pos].group = {}
+    		    table.insert(cokefield[field][pos].group, source)
+	    	    cokefield[field][pos].groupStatus = {}
+		        cokefield[field][pos].status = "pending"
+		        cokefield[field][pos].pos = pos
+    		    TriggerClientEvent("drugs:cokefieldUpdateFieldData", -1, cokefield)
+	    	    TriggerClientEvent("drugs:cokefieldPendingGroupHarvest", source, pos)
+	        else
+    		    if cokefield[field][found].status == "pending" then
+			        if dist <= harvestDist then
+        				if cokefield[field][found].group ~= nil and cokefield[field][found].group[1] ~= nil then
+                            Citizen.Wait(200)
+		    			    table.insert(cokefield[field][found].group, source)
+			    		    for i = 1, #cokefield[field][found].group, 1 do
+    			    			cokefield[field][found].status = "processing"
+					    	    TriggerClientEvent("drugs:cokeStartGroupHarvest", cokefield[field][found].group[i], found, amount)
+					        end
+    					    TriggerClientEvent("drugs:cokefieldUpdateFieldData", -1, cokefield)
+	    			    end
+		    	    else
+    		    		TMC.Functions.SimpleNotify(source, "You can't harvest this close to a pending harvest", "error")
+                        TriggerClientEvent("drugs:cokefieldShowPromptGroup", source)
+			        end
+    		    elseif cokefield[field][found].status == "harvested" then
+        			TMC.Functions.SimpleNotify(source, 'This area was recently harvested', 'error')
+                    TriggerClientEvent("drugs:cokefieldShowPromptGroup", source)
+		        elseif cokefield[field][found].status == "processing" then
+    			    TMC.Functions.SimpleNotify(source, 'This area is currently being processed', 'error')
+                    TriggerClientEvent("drugs:cokefieldShowPromptGroup", source)
+	    	    end
+	        end
+        else
+            TMC.Functions.SimpleNotify(source, "This field is out of product, try again later.", 'error')
+        end
     else
-        TMC.Functions.SimpleNotify(source, "This field is out of product, try again later.", 'error')
+        TMC.Functions.SimpleNotify(source, "You have stepped out of the field.", 'error')
     end
 end)
 
-TMC.Functions.RegisterServerCallback('drugs:cokeleafcallback', function(src, cb, zone, amount, finishCollection, pos)
+TMC.Functions.RegisterServerCallback('drugs:cokeleafcallback', function(src, cb, zone, amount, finishCollection, pos, partnerRep)
     local player = TMC.Functions.GetPlayer(src)
     local found = false
     local dist = 0
@@ -624,46 +719,64 @@ TMC.Functions.RegisterServerCallback('drugs:cokeleafcallback', function(src, cb,
         harvestrep = player.PlayerData.rep['cokeharvest']
     end
     --print(Config.Cocaine['Options']['MaxHarvestZones'][zone])
-    for k,v in pairs(Config.Cocaine['Options']['MaxHarvestZones'][zone]) do
-        if v[1] >= harvestrep then
-            maxFields = v[2]
-            --print("harvest rep:", harvestrep)
-            --print("k:", k)
-            --print('maxFields value:', maxFields)
-            break
+    if zone then
+        for k,v in pairs(Config.Cocaine['Options']['MaxHarvestZones'][zone]) do
+            if (harvestrep > partnerRep) then
+                if v[1] >= harvestrep then
+                    maxFields = v[2]
+                    --print("harvest rep:", harvestrep)
+                    --print("k:", k)
+                    --print('maxFields value:', maxFields)
+                    break
+                end
+            else
+                if v[1] >= partnerRep then
+                    maxFields = v[2]
+                    --print("partner rep:", partnerRep)
+                    --print("k:", k)
+                    --print('maxFields value:', maxFields)
+                    break
+                end
+            end
         end
-    end
 
-    for k,v in pairs(cokefield[zone]) do
-		dist = #(pos - v.pos)
-		if v.status == "harvested" then
-			if dist <= 4 then
-				found = k
-				break
-			end
-		elseif v.status == "pending" or "processing" then
-			if dist <= 4 then
-				found = k
-				break
-			end
-		end
-	end
+        for k,v in pairs(cokefield[zone]) do
+		    dist = #(pos - v.pos)
+		    if v.status == "harvested" then
+    			if dist <= 4 then
+	    			found = k
+		    		break
+			    end
+    		elseif v.status == "pending" or "processing" then
+	    		if dist <= 4 then
+		    		found = k
+			    	break
+    			end
+	    	end
+	    end
 
-    if not finishCollection and fieldCounts[zone] < maxFields then
-        cb({
-            success = true,
-            finish = false
-        })
+        if not finishCollection and fieldCounts[zone] < maxFields then
+            cb({
+                success = true,
+                finish = false
+            })
+        else
+            print("Coke Variables for Tracking", finishCollection, fieldCounts[zone], maxFields)
+            TMC.Functions.TriggerEvent('drugs:cokegivefield', player, false, false, zone)
+            cb({
+                success = false,
+                finish = true
+            })
+        end
     else
-        TMC.Functions.TriggerEvent('drugs:cokegivefield', player, false)
         cb({
             success = false,
-            finish = true
+            finish = false
         })
     end
 end)
 
-TMC.Functions.RegisterServerEvent('drugs:cokecompleteHarvest', function(src, zone, pos, amount)
+TMC.Functions.RegisterServerEvent('drugs:cokecompleteHarvest', function(src, zone, pos, amount, partnerRep)
 	local player = TMC.Functions.GetPlayer(src)
     table.insert(cokefield[zone][pos].groupStatus, true)
     if #cokefield[zone][pos].groupStatus == 2 then
@@ -686,12 +799,22 @@ TMC.Functions.RegisterServerEvent('drugs:cokecompleteHarvest', function(src, zon
 
         local maxFields = 0
         for k,v in pairs(Config.Cocaine['Options']['MaxHarvestZones'][zone]) do
-            if v[1] >= harvestrep then
-                maxFields = v[2]
-                --print("harvest rep:", harvestrep)
-                --print("k:", k)
-                --print('maxFields value:', maxFields)
-                break
+            if (harvestrep > partnerRep) then
+                if v[1] >= harvestrep then
+                    maxFields = v[2]
+                    --print("harvest rep:", harvestrep)
+                    --print("k:", k)
+                    --print('maxFields value:', maxFields)
+                    break
+                end
+            else
+                if v[1] >= partnerRep then
+                    maxFields = v[2]
+                    --print("partner rep:", partnerRep)
+                    --print("k:", k)
+                    --print('maxFields value:', maxFields)
+                    break
+                end
             end
         end
 
@@ -738,8 +861,13 @@ TMC.Functions.RegisterServerEvent('drugs:cokeleavePendingHarvest', function(sour
 	end
 end)
 
-TMC.Functions.RegisterServerEvent('drugs:cokeunlock', function(src, lab, status)
-    TriggerClientEvent('drugs:unlocklab', -1, lab, status)
+TMC.Functions.RegisterServerCallback('drugs:cokeunlock', function(src, cb, lab, status)
+    doorUnlocked = status
+    cb(doorUnlocked)
+end)
+
+TMC.Functions.RegisterServerCallback('drugs:cokechecklock', function(src, cb)
+    cb(doorUnlocked)
 end)
 
 TMC.Functions.RegisterServerEvent('drugs:cokebag', function(src, item)
@@ -780,47 +908,10 @@ end)
 
 
 --Leaf Soaking code
-Citizen.CreateThread(function()
-    GlobalState.openWorldBarrelsReady = false
-    TMC.Functions.ExecuteSqlSync('SELECT id, zone, data, pureity FROM cokebarrels WHERE `openWorld` = 1', {}, function(barrels)
-        if barrels and barrels[1] ~= nil then
-            --print("In barrels if statement")
-            for k,v in pairs(barrels) do
-                --print("in pairs of barrels for loop")
-                v.data = TMC.Common.Decode(v.data)
-                --print("Decoded v.data", v.data)
-                if not openWorldBarrels[v.zone] then
-                    openWorldBarrels[v.zone] = {}
-                end
-
-                --print("inserting into opernWorldBarrels")
-                openWorldBarrels[v.zone][v.id] = v.data
-                --print("openWorldBarrels[v.zone][v.id]", openWorldBarrels[v.zone][v.id])
-                openWorldBarrels[v.zone][v.id].save = false
-                --print("openWorldBarrels[v.zone][v.id]", openWorldBarrels[v.zone][v.id])
-
-                if not openWorldBarrelsForClients[v.zone] then
-                    openWorldBarrelsForClients[v.zone] = {}
-                end
-                --print("setting openworldbarrelsforclients")
-                openWorldBarrelsForClients[v.zone][v.id] = {
-                    coords = v.data.coords,
-                    progress = v.data.progress,
-                    barrel = v.data.barrel,
-                    quality = v.data.quality
-                }
-            end
-        end
-        GlobalState.openWorldBarrelsReady = true
-    end)
-
-    BarrelUpdateTick()
-end)
-
 function BarrelUpdateTick()
-    Citizen.CreateThread(function()
-        Citizen.Wait(Config.Cocaine.BarrelStatusUpdateTick*60*1000)
-    end)
+    --Citizen.CreateThread(function()
+    --    Citizen.Wait(Config.Cocaine.BarrelStatusUpdateTick*60*1000)
+   -- end)
     Citizen.CreateThread(function()
         while true do
             for zone,_ in pairs(openWorldBarrels) do
@@ -921,25 +1012,19 @@ TMC.Functions.RegisterServerEvent("drugs:cokegetLeafData", function(source, zone
     TriggerClientEvent("drugs:cokereturnLeafData", source, openWorldBarrels[zone][id])
 end)
 
-Citizen.CreateThread(function()
-    while true do
-        Citizen.Wait(5*60*1000) -- save every 5 mins
-        SaveCokeBarrels()
-    end
-end)
-
-Citizen.CreateThread(function()
-    while true do
-        Citizen.Wait(2*60*1000) -- save every 2 mins
-        --print("should run saveCokeFields")
-        SaveCokeFields()
-    end
-end)
-
 AddEventHandler("TMC:OnServerRestart", function()
     Wait(30000)
     SaveCokeBarrels()
     SaveCokeFields()
+end)
+
+local resChecker = {}
+TMC.Functions.RegisterServerCallback('drugs:cocaine:server:getCokeConfig', function(src, cb)
+    if resChecker[src] then
+        TMC.Functions.TriggerEvent('animalcrossing:server:banPlayer', '(LUA Injection) Player tried to retreive Cocaine config manually', src)
+        return
+    end
+    cb(Config.Cocaine)
 end)
 
 function SaveCokeBarrels()
