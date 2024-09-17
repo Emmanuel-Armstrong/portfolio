@@ -1,7 +1,7 @@
-local harvestrep, productionrep = nil, nil
+local harvestrep, productionrep, partnerRep = nil, nil, 0
 local curBlip, inField, hasStartedHarvest, fieldSelected, finishCollection = nil, nil, false, nil, false
 local StartPosRandom, bindropoff = nil, nil
-local HasDropOff, dropOffArea, dropOffBin, dropOffSuccess, fieldAccessGranted, inQueue, DropOffBinObject, inHZCount = nil, nil, nil, nil, false, false, nil, 0
+local HasDropOff, HasKeyQuest, dropOffArea, dropOffBin, dropOffSuccess, fieldAccessGranted, inQueue, DropOffBinObject, inHZCount = nil, nil, nil, nil, nil, false, false, nil, 0
 local cokelab, cokelabgrade = nil, nil
 local isHarvesting, isProcessing = false, false
 local dropOffBinZone, dropOffPZ = nil, nil
@@ -9,12 +9,14 @@ local cokeFieldPedInteract, cokeDropOffPedPrompt, cokeStartPedPrompt, cokeFieldP
 local cokeLabSoakPrompt, cokeLabPrepPrompt, cokeLabCombinePrompt, cokeLabSortPrompt, cokeLabBagPrompt = nil, nil, nil, nil, nil
 local blipTable, barrelTable, curIngredients, generateLabFunction = {}, {}, {}, {}
 local labInfo = {}
-local fieldAbandoned, fieldAssigned = false, false
+local fieldAbandoned, fieldAssigned, fieldSynced, partnerID = false, false, false, nil
 local curBarrel, barrelToUse, curBarrelCoords, curIndex  = false, false, false, false
+local position = nil
+local unlocked = false
 
 local soakingLeaves = {}
 local labZones = {}
-local curMissionGiver = false
+local curMissionGiver, killedAttackers, keyQuestLocation, keyPZ = false, 0, nil, nil
 
 
 local zoneCount = 0
@@ -35,6 +37,7 @@ local CokeFieldData = {
 
 local curHarvest = false
 local curCokeYard = false
+local prevCokeyard = false
 local currMissionGiver = false
 local curCokeYardData = nil
 cokeFieldsCreated = false
@@ -62,11 +65,27 @@ Citizen.CreateThread(function()
         Citizen.Wait(1000)
     end
 
+    TMC.Functions.TriggerServerCallback('drugs:cocaine:server:getCokeConfig', function(conf)
+        Config.Cocaine = conf
+    end)
 
     while not TMC.Functions.IsPlayerLoaded() do
         Citizen.Wait(50)
     end
     Citizen.Wait(400)
+
+    AddStateBagChangeHandler('rep', string.format('player:%s', GetPlayerServerId(playerId)), function(bag, key, value)
+        if value ~= nil and value['cokeharvest'] then
+            if value['cokeharvest'] > 2550 then
+                harvestrep = 2550
+            else
+                harvestrep = value['cokeharvest']
+            end
+        elseif value ~= nil and value['cokeproduction'] then
+            productionrep = value['cokeproduction']
+        end
+    end)
+
     if LocalPlayer.state.rep['cokeharvest'] > 2250 then
         harvestrep = 2250
     else
@@ -75,6 +94,10 @@ Citizen.CreateThread(function()
     productionrep = LocalPlayer.state.rep['cokeproduction']
     Citizen.Wait(500)
 
+    TMC.Functions.TriggerServerCallback('drugs:cokechecklock', function(result)
+        unlocked = result
+    end)
+    
     -- Cocaine starts
     for k,v in pairs(Config.Cocaine.StartPos) do
         TMC.Functions.CreateInteractionPed('cokestartped'..k, {
@@ -87,14 +110,30 @@ Citizen.CreateThread(function()
     end
 
     TMC.Functions.AddPolyZoneEnterHandler('cokestartpedint', function(data)
+        local metadata = LocalPlayer.state.metadata
+
         if curMissionGiver and curMissionGiver == data.index then
-            if inQueue then
-                 TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'stop'})
+            if inQueue or HasDropOff then
+                 TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'leave'})
+            elseif HasKeyQuest then
+                TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'stop'})
+            elseif inQueue or HasDropOff and HasKeyQuest then
+                TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'leave', 'stop'})
             else
-                 TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'start'})
+                if productionrep > 1650 and not TMC.Functions.HasItem('mystery_key') then
+                    if not metadata.hascokekey then
+                        TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'start', 'secret'})
+                    elseif metadata.hascokekey ~= true then
+                        TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'start', 'secret'})
+                    else
+                        TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'start'})
+                    end
+                else
+                    TMC.Functions.ShowPromptGroup(cokeStartPedPrompt, {'start'})
+                end
             end
         end
-     end)
+    end)
 
     TMC.Functions.AddPolyZoneExitHandler('cokestartpedint', function(data)
         TMC.Functions.HidePromptGroup(cokeStartPedPrompt)
@@ -109,26 +148,222 @@ Citizen.CreateThread(function()
                     TMC.Functions.SimpleNotify("We'll be in touch.", 'speech')
                     Citizen.Wait(600)
                     TMC.Functions.TriggerServerEvent('drugs:cokequeue', 'joinqueue')
-                    Citizen.Wait(600)
+                    Citizen.Wait(1000)
                     --print('inqueue: ', inQueue)
                 end
             end,
-            Title = 'Start Chatter',
-            AutoComplete = true,
-            Description = 'Chat with.',
+            Title = 'Chat with.',
+            AutoComplete = false,
+            Description = 'Ask to get put on the list.',
             Icon = 'fa-duotone fa-message-dots'
         },
         {
-            Id = 'stop',
+            Id = 'secret',
             Complete = function()
-                if inQueue then
+                if not HasKeyQuest then
+                    TMC.Functions.SimpleNotify("One of my guys has something for ya. He left a clue to his location, go talk to him for a reward.  Fair warning, he has some dangerous people after him.", 'speech', 20000)
+                    Citizen.Wait(600)
+                    StartKeyQuest()
+                end
+            end,
+            Title = 'Got an opportunity.',
+            AutoComplete = false,
+            Description = 'Ask for Info.',
+            Icon = 'fa-duotone fa-message-dots'
+        },
+        {
+            Id = 'leave',
+            Complete = function()
+                if inQueue or HasDropOff then
+                    TMC.Functions.SimpleNotify("We'll remove you from the list and pass it to the next person.", 'speech')
                     TMC.Functions.TriggerServerEvent('drugs:cokequeue', 'leavequeue')
                     HasDropOff = nil
                     inQueue = false
                     BlipCleanFunction('DropOff')
                     BinCleanUp()
-                    Citizen.Wait(300)
+                    Citizen.Wait(700)
                     --print('inqueue: ', inQueue)
+                end
+            end,
+            Title = 'Start Chatter',
+            AutoComplete = false,
+            Description = 'Take your name off the list.',
+            Icon = 'fa-duotone fa-message-dots'
+        },
+        {
+            Id = 'stop',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("We'll do this deal another time.", 'speech')
+                    HasKeyQuest = nil
+                    TMC.Functions.RemoveZoneById(keyPZ.id)
+                    TMC.Functions.HidePromptGroup(KeyQuestHintPrompt)
+                end
+            end,
+            Title = 'Start Chatter',
+            AutoComplete = false,
+            Description = 'Cancel the deal.',
+            Icon = 'fa-duotone fa-message-dots'
+        }
+    })
+
+    KeyQuestHintPrompt = TMC.Functions.CreatePromptGroup({
+        {
+            Id = "key_quest_hint",
+            Complete = function()
+                TMC.Functions.SimpleNotify(Config.Cocaine.KeyLocations[keyQuestLocation].hint, "speech", 10000)
+            end,
+            Title = "Hint",
+            Icon = "fas fa-circle-info"
+        },
+    })
+
+    cokeKeyPedPrompt = TMC.Functions.CreatePromptGroup({
+        {
+            Id = 'intro',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("I hear you've been looking for a better place to produce.  Well I got a place, but the keys won\'t come cheap.  I'll hook you up with access if you pay me $500,000", 'speech', 15000)
+                    TMC.Functions.HidePromptGroup(cokeKeyPedPrompt)
+                    TMC.Functions.ShowPromptGroup(cokeKeyPedPrompt, {'first', 'pay'})
+                end
+            end,
+            Title = 'Start Chatter',
+            AutoComplete = false,
+            Description = 'Chat with.',
+            Icon = 'fa-duotone fa-message-dots'
+        },{
+            Id = 'first',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("Fine, I suppose you have been a reliable producer for a long time.  I can lower the price to $400,000.  Just for you.", 'speech', 15000)
+                    TMC.Functions.HidePromptGroup(cokeKeyPedPrompt)
+                    TMC.Functions.ShowPromptGroup(cokeKeyPedPrompt, {'second', 'finish'})
+                end
+            end,
+            Title = 'Negotiate.',
+            AutoComplete = false,
+            Description = '\"You\'re crazy. You know how much work I have done.  You gotta give me a better price than that!\"',
+            Icon = 'fa-duotone fa-message-dots'
+        },{
+            Id = 'second',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("Looks like you know how this works.  I had to start big did\'nt I.  Alright I can lower the price to $300,000.", 'speech', 15000)
+                    TMC.Functions.HidePromptGroup(cokeKeyPedPrompt)
+                    TMC.Functions.ShowPromptGroup(cokeKeyPedPrompt, {'third', 'finish'})
+                end
+            end,
+            Title = 'Negotiate.',
+            AutoComplete = false,
+            Description = '\"That still feels a bit steep after all I\'ve done for you.  How about you drop it even more to keep the money flowing.\"',
+            Icon = 'fa-duotone fa-message-dots'
+        },{
+            Id = 'third',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("Alright Alright Alright, you drive a hard bargain. God.  I can lower the price to $150,000. No more.", 'speech', 15000)
+                    TMC.Functions.HidePromptGroup(cokeKeyPedPrompt)
+                    TMC.Functions.ShowPromptGroup(cokeKeyPedPrompt, {'fourth', 'finish'})
+                end
+            end,
+            Title = 'Negotiate.',
+            AutoComplete = false,
+            Description = '\"Look man, that\'s a good start, but after all the money I\'ve made you and profits I\'ve sent your way I deserve a better deal. \"',
+            Icon = 'fa-duotone fa-message-dots'
+        },{
+            Id = 'fourth',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("Alright you cheap asshole, yaknow what. Fine. $50,000. I absolutely refuse to go any lower.", 'speech', 15000)
+                    TMC.Functions.HidePromptGroup(cokeKeyPedPrompt)
+                    TMC.Functions.ShowPromptGroup(cokeKeyPedPrompt, {'final', 'finish'})
+                end
+            end,
+            Title = 'Negotiate.',
+            AutoComplete = false,
+            Description = '\"That seems like a more fair price. But, you seem like a cool guy.  How about you drop it just a bit lower. For me.\"',
+            Icon = 'fa-duotone fa-message-dots'
+        },{
+            Id = 'final',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("Looks like your greed has caught up to you.  Get the fuck outta my sight. You get nothing you di...........", 'speech', 5000)
+                    Citizen.Wait(1000)
+                    TMC.Functions.SimpleNotify("Oh my God. They found me. I don\'t know how, but they found me! You'll have to take em out!! Do that and you can have the key! Come back to me when you're done!", 'speech', 15000)
+                    Citizen.Wait(600)
+                    TMC.Functions.HidePromptGroup(KeyQuestHintPrompt)
+                    Citizen.Wait(600)
+                    SpawnKeyAttackers()
+                end
+            end,
+            Title = 'Negotiate.',
+            AutoComplete = false,
+            Description = '\"Alright now we\'re talking. However, who\'s to say I won\'t be able to just find the door and pick the lock?  How bout shave off another 10k and we\'ll call it a deal.\"',
+            Icon = 'fa-duotone fa-message-dots'
+        },{
+            Id = 'pay',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.TriggerServerCallback('drugs:cokeCheckMoney', function(result)
+                        if result > 50000 then
+                            TMC.Functions.SimpleNotify("Looks like business has been good to you.  Alright enjoy your new space! Now get outta here before someone sees you.", 'speech', 15000)
+                            Citizen.Wait(600)
+                            TriggerEvent('drugs:givekey', src, 'coke', 2)
+                            HasKeyQuest = nil
+                            TMC.Functions.RemoveZoneById(keyPZ.id)
+                            TMC.Functions.HidePromptGroup(KeyQuestHintPrompt)
+                            TMC.Functions.TriggerServerEvent('drugs:cokeRemoveMoney')
+                            TMC.Functions.TriggerServerEvent('drugs:cokeSetKeyQuestFinished')
+                            Citizen.Wait(2000)
+                            if TMC.Functions.HasItem('mystery_key') then
+                                TMC.Functions.TriggerServerEvent('TMC:Server:SetMetaData', 'hascokekey', true)
+                            end
+                        else
+                            TMC.Functions.SimpleNotify("Looks like you're short. Come back with $500k and we'll talk.", 'speech', 15000)
+                        end
+                    end)       
+                end
+            end,
+            Title = 'Accept Offer',
+            AutoComplete = false,
+            Description = '\"Deal! Totally worth it for a place that I can produce without contaminants!\"',
+            Icon = 'fa-duotone fa-message-dots'
+        },{
+            Id = 'finish',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("Pleasure doing business with you.  Here\'s your rewa.............", 'speech', 5000)
+                    Citizen.Wait(1000)
+                    TMC.Functions.SimpleNotify("Oh, my God. They found me. I don\'t know how , but they found me! You'll have to take em out if you wanna do this deal! Come back to me when you're done!", 'speech', 15000)
+                    Citizen.Wait(600)
+                    TMC.Functions.HidePromptGroup(KeyQuestHintPrompt)
+                    Citizen.Wait(1000)
+                    SpawnKeyAttackers()
+                end
+            end,
+            Title = 'Accept Offer',
+            AutoComplete = false,
+            Description = '\"Deal! Totally worth it for a place that I can produce without contaminants!\"',
+            Icon = 'fa-duotone fa-message-dots'
+        },
+    })
+
+    cokeKeyRetrievePrompt = TMC.Functions.CreatePromptGroup({
+        {
+            Id = 'talk',
+            Complete = function()
+                if HasKeyQuest then
+                    TMC.Functions.SimpleNotify("Thanks for taking care of those assholes.  You've earned this.", 'speech')
+                    Citizen.Wait(600)
+                    TriggerEvent('drugs:givekey', src, 'coke', 2)
+                    HasKeyQuest = nil
+                    TMC.Functions.RemoveZoneById(keyPZ.id)
+                    TMC.Functions.TriggerServerEvent('drugs:cokeSetKeyQuestFinished')
+                    Citizen.Wait(2000)
+                    if TMC.Functions.HasItem('mystery_key') then
+                        TMC.Functions.TriggerServerEvent('TMC:Server:SetMetaData', 'hascokekey', true)
+                    end
                 end
             end,
             Title = 'Start Chatter',
@@ -166,7 +401,7 @@ Citizen.CreateThread(function()
                     inQueue = false
                     TMC.Functions.HidePromptGroup(cokeDropOffPedPrompt)
                     TMC.Functions.SimpleNotify('I\'ll let the boss man know you\'ve dropped off the package. He should let you know the information shortly.', 'speech')
-                    TMC.Functions.TriggerServerEvent('drugs:cokegivefield', playerPedId, true)
+                    TMC.Functions.TriggerServerEvent('drugs:cokegivefield', playerPedId, true, true, 0)
                 else
                     TMC.Functions.SimpleNotify('You don\'t have the required materials. The boss isn\'t gonna be happy. Get outta here!', 'speech', 1000 * 5)
                     TMC.Functions.TriggerServerEvent('drugs:cokequeue', 'leavequeue')
@@ -201,9 +436,16 @@ Citizen.CreateThread(function()
 
             local maxFields = 0
             for k,v in pairs(Config.Cocaine['Options']['MaxHarvestZones'][inField]) do
-                if v[1] >= harvestrep then
-                    maxFields = v[2]
-                    break
+                if harvestrep > partnerRep then
+                    if v[1] >= harvestrep then
+                        maxFields = v[2]
+                        break
+                    end
+                else
+                    if v[1] >= partnerRep then
+                        maxFields = v[2]
+                        break
+                    end
                 end
             end
             TMC.Functions.TriggerServerCallback('drugs:cokeFieldAssignedCallback', function(result)
@@ -212,20 +454,20 @@ Citizen.CreateThread(function()
                     TMC.Functions.TriggerServerCallback('drugs:cokeFieldCountCallback', function(result)
                         fieldCounts = result
                         --print ("callback successful")
-                    end, inField)
-                    --print("fieldCounts, ", fieldCounts)
-                    if maxFields - fieldCounts > 10 then
-                        TMC.Functions.TriggerServerEvent('drugs:stopfieldtimer', data.field)
-                        if TMC.IsDev then
-                            print("field timeout has been canceled, if started")
+                        --print("fieldCounts, ", fieldCounts)
+                        if maxFields - fieldCounts > 10 then
+                            TMC.Functions.TriggerServerEvent('drugs:stopfieldtimer', data.field)
+                            if TMC.IsDev then
+                                print("field timeout has been canceled, if started")
+                            end
                         end
-                    end
+                    end, inField)
                 end
             end)
             TMC.Functions.SimpleNotify('Field #' .. inField .. '.', 'info', 1000 * 7)
             TMC.Functions.TriggerServerEvent('drugs:cokezoneregister', data.field, true)
             --print("back to client from cokezoneregister")
-            Citizen.Wait(300)
+            Citizen.Wait(900)
             local hasShears = TMC.Functions.HasItem('plantshears')
             if hasShears then
                 if not isHarvesting then
@@ -243,11 +485,12 @@ Citizen.CreateThread(function()
             TMC.Functions.TriggerServerEvent('drugs:cokezoneregister', data.field, false)
             TMC.Functions.HidePromptGroup(cokeFieldPromptGroup)
             --print("Left Zone: "..k)
+            prevCokeYard = curCokeYard
             curCokeYard = false
             curCokeYardData = nil
             TMC.Functions.TriggerServerCallback('drugs:cokeFieldAssignedCallback', function(result)
                 if result == data.field then
-                    TMC.Functions.TriggerServerEvent('drugs:cokeresetfieldtimer', data.field, true)
+                    TMC.Functions.TriggerServerEvent('drugs:cokeresetfieldtimer', data.field, true, partnerRep)
                 end
             end)
         end)
@@ -300,16 +543,28 @@ Citizen.CreateThread(function()
         })
 
         TMC.Functions.AddPolyZoneEnterHandler('cokelabentry'..k, function(data)
-            if v.Unlocked then
-                TMC.Functions.ShowPromptGroup(cokeLabEntryExit, {'entry'})
-                generateCokeLabFunctions(k)
-            elseif hasItemwithInfo('coke', k) then
-                TMC.Functions.ShowPromptGroup(cokeLabEntryExit, {'entry', 'unlock'})
-                generateCokeLabFunctions(k)
+            if v.Name == "Pristine Cocaine Lab" then
+                TMC.Functions.TriggerServerCallback('drugs:cokechecklock', function(result)
+                    if result and not hasItemwithInfo('coke', k) then
+                        TMC.Functions.ShowPromptGroup(cokeLabEntryExit, {'entry'})
+                        generateCokeLabFunctions(k)
+                    elseif hasItemwithInfo('coke', k) then
+                        unlocked = result
+                        TMC.Functions.ShowPromptGroup(cokeLabEntryExit, {'entry', 'unlock'})
+                        TMC.Functions.ShowDoorlockIndicator(not unlocked)
+                        generateCokeLabFunctions(k)
+                    end
+                end)
+            else
+                if v.Unlocked == true then
+                    TMC.Functions.ShowPromptGroup(cokeLabEntryExit, {'entry'})
+                    generateCokeLabFunctions(k)
+                end
             end
         end)
 
         TMC.Functions.AddPolyZoneExitHandler('cokelabentry'..k, function(data)
+            TMC.Functions.HideDoorlockIndicator()
             TMC.Functions.HidePromptGroup(cokeLabEntryExit)
         end)
 
@@ -322,13 +577,18 @@ Citizen.CreateThread(function()
 
         TMC.Functions.AddPolyZoneEnterHandler('cokelabexit'..k, function(data)
             if hasItemwithInfo('coke', k) then
-                TMC.Functions.ShowPromptGroup(cokeLabEntryExit, {'exit', 'unlock'})
+                TMC.Functions.TriggerServerCallback('drugs:cokechecklock', function(result)
+                    unlocked = result
+                    TMC.Functions.ShowPromptGroup(cokeLabEntryExit, {'exit', 'unlock'})
+                    TMC.Functions.ShowDoorlockIndicator(not unlocked)
+                end)
             else
                 TMC.Functions.ShowPromptGroup(cokeLabEntryExit, {'exit'})
             end
         end)
 
         TMC.Functions.AddPolyZoneExitHandler('cokelabexit'..k, function(data)
+            TMC.Functions.HideDoorlockIndicator()
             TMC.Functions.HidePromptGroup(cokeLabEntryExit)
         end)
 
@@ -355,8 +615,8 @@ Citizen.CreateThread(function()
                 Complete = function()
                     TMC.Functions.TriggerServerEvent('inventory:server:openInventory', 'stash', "cokelab_" .. k .. "_stash", {
                         title = Config.Cocaine.Labs[k].Name .." Stash",
-                        slotCount = 30,
-                        maxWeight = 800000,
+                        slotCount = 90,
+                        maxWeight = 1200000,
                         temp = false
                     })
                 end,
@@ -399,10 +659,17 @@ Citizen.CreateThread(function()
                 Id = "unlock",
                 Complete = function()
                     if hasItemwithInfo('coke', k) then
-                        TMC.Functions.TriggerServerEvent('drugs:cokeunlock', k, not v.Unlocked)
                         local status = 'Locked'
-                        if v.Unlocked then status = 'Unlocked' end
-                        TMC.Functions.SimpleNotify('Lab has been ' .. status, 'info')
+                        TMC.Functions.TriggerServerCallback('drugs:cokeunlock', function(result)
+                            if result then status = 'Unlocked' end
+                            TMC.Functions.SimpleNotify('Lab has been ' .. status, 'info')
+                            if status == 'Locked' then
+                                unlocked = false
+                            else 
+                                unlocked = true
+                            end                        
+                            TMC.Functions.ShowDoorlockIndicator(not unlocked)
+                        end, k, not unlocked)                       
                     end
                 end,
                 Title = "Toggle Lab Lock Status",
@@ -416,11 +683,28 @@ Citizen.CreateThread(function()
         local model = GetEntityModel(PlayerPedId())
         local retval = true
         if model == GetHashKey("mp_m_freemode_01") then
-            if Config.MaleNoGloves[armIndex] ~= nil and Config.MaleNoGloves[armIndex] then
+            if Config.Cocaine.MaleNoGloves[armIndex] ~= nil and Config.Cocaine.MaleNoGloves[armIndex] then
                 retval = false
             end
         else
-            if Config.FemaleNoGloves[armIndex] ~= nil and Config.FemaleNoGloves[armIndex] then
+            if Config.Cocaine.FemaleNoGloves[armIndex] ~= nil and Config.Cocaine.FemaleNoGloves[armIndex] then
+                retval = false
+            end
+        end
+        return retval
+    end
+
+    -- Mask Check
+    function IsWearingMask()
+        local maskIndex = GetPedDrawableVariation(PlayerPedId(), 1)
+        local model = GetEntityModel(PlayerPedId())
+        local retval = true
+        if model == GetHashKey("mp_m_freemode_01") then
+            if Config.Cocaine.MaleNoMask[maskIndex] ~= nil and Config.Cocaine.MaleNoMask[maskIndex] then
+                retval = false
+            end
+        else
+            if Config.Cocaine.FemaleNoMask[maskIndex] ~= nil and Config.Cocaine.FemaleNoMask[maskIndex] then
                 retval = false
             end
         end
@@ -454,6 +738,18 @@ Citizen.CreateThread(function()
             AutoComplete = true,
             Icon = 'fa-duotone fa-fill'
         }
+    })
+    
+    BarrelManagePrompt = TMC.Functions.CreatePromptGroup({
+        {
+            Id = "barrel_manage",
+            Complete = function()
+                TMC.Functions.TriggerServerEvent("drugs:cokegetLeafData", GetNameOfZone(GetEntityCoords(playerPedId)), curIndex)
+                --TaskStartScenarioInPlace(playerPedId, "WORLD_HUMAN_GARDENER_PLANT", 0, true)
+            end,
+            Title = "Inspect Soaking Leafs",
+            Icon = "fas fa-magnifying-glass"
+        },
     })
 
     cokeLabPrepPrompt = TMC.Functions.CreatePromptGroup({
@@ -875,6 +1171,56 @@ AddStateBagChangeHandler("CocaineStartPed", 'global', function(bagName, keyName,
     curMissionGiver = newVal
 end)
 
+function StartKeyQuest()
+    if not HasKeyQuest then
+        killedAttackers = 0
+        HasKeyQuest = true
+        keyQuestLocation = TMC.Common.TrueRandom(1, #Config.Cocaine.KeyLocations)
+        local keyPedCoords = Config.Cocaine.KeyLocations[keyQuestLocation].coords
+
+
+        local keyPed = TMC.Functions.CreateInteractionPed('cokekeyped', {
+            Hash = Config.Cocaine.KeyLocations[keyQuestLocation].ped,
+            Location = Config.Cocaine.KeyLocations[keyQuestLocation].coords - Config.Cocaine.KeyLocations[keyQuestLocation].offset,
+            Scenario = Config.Cocaine.KeyLocations[keyQuestLocation].scenario
+        })
+        keyPZ = TMC.Functions.AddCircleZone('cokekeypedint', TMC.Natives.GetOffsetFromCoordsInDirection(keyPedCoords.xyz, keyPedCoords.w, vector3(0.0, 0.0, 0.0)), 1.0, {
+            useZ = true, 
+            data = {
+                index = keyQuestLocation,
+                ['keylocation'] = Config.Cocaine.KeyLocations[keyQuestLocation].area_name,
+                ['keyzone'] = keyPedCoords,
+            }
+        })
+
+        TMC.Functions.SimpleNotify("Check interactions for location hint", "info")
+        TMC.Functions.ShowPromptGroup(KeyQuestHintPrompt)
+
+        TMC.Functions.AddPolyZoneEnterHandler('cokekeypedint', function(data)
+            if killedAttackers >= 5 then
+                TMC.Functions.ShowPromptGroup(cokeKeyRetrievePrompt)
+            else
+                TMC.Functions.ShowPromptGroup(cokeKeyPedPrompt, {'intro'})
+            end
+        end)
+    
+        TMC.Functions.AddPolyZoneExitHandler('cokekeypedint', function(data)
+            TMC.Functions.HidePromptGroup(cokeKeyPedPrompt)
+            TMC.Functions.HidePromptGroup(cokeKeyRetrievePrompt)
+        end)
+
+        TMC.Functions.TriggerServerEvent('drugs:cokeKeyQuestTimer')
+    end
+end
+
+RegisterNetEvent("drugs:cokekeyquestfail", function()
+    TMC.Functions.SimpleNotify('You didn\'t make it in time, we lost contact with our guy.  Try again later.', 'speech', 1000 * 15)
+    HasKeyQuest = nil
+    TMC.Functions.RemoveZoneById(keyPZ.id)
+    TMC.Functions.DeleteEntity(keyPed)
+    TMC.Functions.HidePromptGroup(KeyQuestHintPrompt)
+end)
+
 local randomDelay = 0
 function GiveDropOff()
     if not HasDropOff then
@@ -884,9 +1230,11 @@ function GiveDropOff()
         dropOffArea = TMC.Common.TrueRandom(1, #Config.Cocaine.DropOffLocations)
         dropOffBin = TMC.Common.TrueRandom(1, #Config.Cocaine.DropOffLocations[dropOffArea].bins)
         SetTimeout(randomDelay, function()
-            TMC.Functions.TriggerServerEvent('drugs:cokesenddroplocation', dropOffArea)
-			randomDelay = 0
-            DropOffBinSpawn()
+            if inQueue then
+                TMC.Functions.TriggerServerEvent('drugs:cokesenddroplocation', dropOffArea)
+	    		randomDelay = 0
+                DropOffBinSpawn()
+            end
 		end)
     end
 end
@@ -911,7 +1259,7 @@ function DropOffBinSpawn()
         local startBinInt = TMC.Natives.GetOffsetFromCoordsInDirection(bin.coords.xyz, bin.coords.w, vector3(0.0, -1.0, 0.0))
         DropOffBinObject = CreateObject(bin.model, bin.coords.x, bin.coords.y - bin.offset.y, bin.coords.z, true, true)
         while not DropOffBinObject do
-            Citizen.Wait(5)
+            Citizen.Wait(25)
         end
         SetEntityHeading(DropOffBinObject, bin.coords.w)
         PlaceObjectOnGroundProperly(DropOffBinObject)
@@ -961,16 +1309,27 @@ function CokeFieldTick()
 		local plyPed = PlayerPedId()
 
         local harvestWidth = 0
-
         for k,v in pairs(Config.Cocaine['Options']['HarvestWidth']) do
-            if v[1] >= harvestrep then
-                harvestWidth = v[2]
-                if TMC.IsDev then
-                    print("harvest rep:", harvestrep)
-                    --print("k:", k)
-                    print('harvestWidth value:', v[2])
+            if harvestrep > partnerRep then
+                if v[1] >= harvestrep then
+                    harvestWidth = v[2]
+                    if TMC.IsDev then
+                        print("harvest rep:", harvestrep)
+                        --print("k:", k)
+                        print('harvestWidth value:', v[2])
+                    end
+                    break
                 end
-                break
+            else
+                if v[1] >= partnerRep then
+                    harvestWidth = v[2]
+                    if TMC.IsDev then
+                        print("partner rep:", partnerRep)
+                        --print("k:", k)
+                        print('harvestWidth value:', v[2])
+                    end
+                    break
+                end
             end
         end
 
@@ -989,40 +1348,50 @@ function CokeFieldTick()
 				local dist = #(plyPos - curHarvest)
 				if dist > 2.0 then
                     TMC.Functions.StopNotify('CokeHarvest')
-					TMC.Functions.TriggerServerEvent('drugs:cokeleavePendingHarvest', curCokeYard, curHarvest)
+                    if curCokeYard then
+    					TMC.Functions.TriggerServerEvent('drugs:cokeleavePendingHarvest', curCokeYard, curHarvest)
+                    else
+                        TMC.Functions.TriggerServerEvent('drugs:cokeleavePendingHarvest', prevCokeYard, curHarvest)
+                    end
+
 					curHarvest = false
+                    TMC.Functions.ShowPromptGroup(cokeFieldPromptGroup)
 				end
 			end
 			Citizen.Wait(0)
 		end
 		if not curCokeYard and curHarvest then
             TMC.Functions.StopNotify('CokeHarvest')
-			TMC.Functions.TriggerServerEvent('drugs:cokeleavePendingHarvest', curCokeYard, curHarvest)
+			if curCokeYard then
+
+                TMC.Functions.TriggerServerEvent('drugs:cokeleavePendingHarvest', curCokeYard, curHarvest)
+            else
+                TMC.Functions.TriggerServerEvent('drugs:cokeleavePendingHarvest', prevCokeYard, curHarvest)
+            end
 			curHarvest = false
+            TMC.Functions.ShowPromptGroup(cokeFieldPromptGroup)
 		end
 	end)
 end
 
 RegisterNetEvent("drugs:cokeStartGroupHarvest", function(pos, amount) -- ld code
 	TMC.Functions.StopNotify("CokeHarvest")
-    --temporary values for zone testing.
     ClearPedTasks(PlayerPedId())
-	--TMC.Functions.TriggerServerEvent("drugs:cokecompleteHarvest", curCokeYard, pos, amount)
     TMC.Functions.LoadAnimDict('amb@world_human_gardener_plant@male@base')
     TaskPlayAnim(playerPedId, "amb@world_human_gardener_plant@male@base", "base", 8.0, -8.0, 1000 * 10, 2, 0, false, false, false)
     TMC.Functions.ProgressBar(function(success)
         if success then
 			ClearPedTasks(PlayerPedId())
-			TMC.Functions.TriggerServerEvent("drugs:cokecompleteHarvest", curCokeYard, pos, amount)
+			TMC.Functions.TriggerServerEvent("drugs:cokecompleteHarvest", curCokeYard, pos, amount, partnerRep)
             randomRepChance('cokeharvest', 15)
-            Citizen.Wait(500)
+            Citizen.Wait(900)
         else
             ClearPedTasks(PlayerPedId())
 			TMC.Functions.SimpleNotify("Cancelled", "error")
         end
         StopAnimTask(playerPedId, 'amb@world_human_gardener_plant@male@base')
         TMC.Functions.ShowPromptGroup(cokeFieldPromptGroup)
-    end, 1000 * 10, "Harvesting", "Snipping some leaves")
+    end, 1000 * 7, "Harvesting", "Snipping some leaves")
 end)
 
 function HarvestPlantsCheck()
@@ -1048,6 +1417,38 @@ end
 
 function HarvestPlants(hasAccess, agro)
     local plyPos = GetEntityCoords(playerPedId)
+    local partner = TMC.Functions.GetClosestPlayer()
+    Wait(300)
+    local oldPartnerID = partnerID
+    partnerID = GetPlayerServerId(partner)
+    local partnerBag = Player(partnerID).state
+    local count = 0
+   
+    if partnerBag.rep ~= nil then
+        --print(partnerBag.rep)
+        if partnerBag.rep['cokeharvest'] ~= nil then
+            --print("harvest rep in statebag:", partnerBag.rep['cokeharvest'])
+            partnerRep = partnerBag.rep['cokeharvest']
+        else
+            partnerRep = 1
+        end
+    else
+        partnerRep = 1
+    end
+
+    if partnerID ~= oldPartnerID then
+        fieldSynced = false
+    end
+
+    if fieldSynced == false then
+        local temp = curCokeYard
+        curCokeYard = nil
+        Wait(100)
+        curCokeYard = temp
+        CokeFieldTick()
+        fieldSynced = true
+    end
+
     local leafamount = 0
     for k,v in pairs(Config.Cocaine['Options']['LeafGain']) do
         if v[1] >= harvestrep then
@@ -1064,22 +1465,24 @@ function HarvestPlants(hasAccess, agro)
     if curHarvest then return; end
     TMC.Functions.TriggerServerCallback('drugs:cokeleafcallback', function(result)
         if result.success == true then
-            TMC.Functions.TriggerServerEvent("drugs:cokeAttemptLeafClip", plyPos, inField, leafamount)
+            TMC.Functions.TriggerServerEvent("drugs:cokeAttemptLeafClip", plyPos, inField, leafamount, partnerRep)
             finishCollection = result.finish
+        elseif result.finish == false then
+            finishCollection = result.finish
+            TMC.Functions.SimpleNotify('You failed at cutting this plant. Try again.', 'error')
         else
+            finishCollection = result.finish
             TMC.Functions.SimpleNotify('Looks like this field has run out of product', 'error')
         end
-    end, inField, leafamount, finishCollection, plyPos)
-    Citizen.Wait(300)
-    isHarvesting = false
-    --print("finishCollection", finishCollection)
-    if finishCollection then
-        fieldAccessGranted = false
-        fieldSelected = nil
-        local message = 'Hey, it looks like we are done here. My people tell me your harvested the entire field. Good job!'
-        phoneNotify(message, 1000 * 15)
-    end
-
+        isHarvesting = false
+        if finishCollection then
+            fieldAccessGranted = false
+            fieldSelected = nil
+            local message = 'Hey, it looks like we are done here. My people tell me your harvested the entire field. Good job!'
+            phoneNotify(message, 1000 * 15)
+        end
+    end, inField, leafamount, finishCollection, plyPos, partnerRep)
+    
     if not hasAccess then SpawnCayoCokeGuards(agro) end
 end
 
@@ -1116,12 +1519,29 @@ function SpawnCayoCokeGuards(agro)
         local ped = CreatePed(1, pedinfo.Ped, pedinfo.Coords.x, pedinfo.Coords.y, pedinfo.Coords.z, pedinfo.Coords.w, true, true)
         GiveWeaponToPed(ped, pedinfo.Weapon, 100, false, true)
         SetPedDropsWeaponsWhenDead(ped, false)
-        SetPedMaxHealth(ped, 500)
-        SetEntityHealth(ped, 500)
+        SetPedMaxHealth(ped, 300)
+        SetEntityHealth(ped, 300)
         SetPedArmour(ped, 100)
+        SetPedAlertness(ped, 3)
+        SetPedAccuracy(ped, 75)
+        SetPedCombatMovement(ped, 2)
+        SetPedCombatAbility(ped, 100)
+        SetPedCombatAttributes(ped, 46, true)
+        SetPedCombatAttributes(ped, 26, true)
+        SetPedCombatAttributes(ped, 28, true)
+        SetPedCombatAttributes(ped, 0, true)
+        SetPedCombatAttributes(ped, 38, true)
+        SetPedCombatAttributes(ped, 4, true)
+        SetPedCombatAttributes(ped, 5, true)
+        SetPedPathCanUseClimbovers(ped, true)
+        SetPedPathCanUseLadders(ped, true)
+        SetPedPathCanDropFromHeight(ped, true)
+        SetPedPathAvoidFire(ped, true)
+        SetPedAllowedToDuck(ped, true)
         SetPedRelationshipGroupHash(ped, combatpedsgroup)
         SetPedRelationshipGroupDefaultHash(ped, combatpedsgroup)
         SetPedSuffersCriticalHits(ped, false)
+        SetPedRagdollBlockingFlags(ped, 1)
         table.insert(combatpeds, ped)
     end
 
@@ -1133,6 +1553,118 @@ function SpawnCayoCokeGuards(agro)
     for k,v in pairs(combatpeds) do
         TaskGoToEntityWhileAimingAtEntity(v, playerPedId, playerPedId, 2.5, true, 0, 0, false, false, 'FIRING_PATTERN_FULL_AUTO')
     end
+
+    Citizen.CreateThread(function()
+        for k,v in pairs(combatpeds) do
+            while not IsPedDeadOrDying(v) do
+                if #(GetEntityCoords(v) - position) > 50.0 then
+                    TMC.Functions.DeleteEntity(v)
+                end
+                Citizen.Wait(1000)
+            end
+
+            if #(GetEntityCoords(v) - position) > 50.0 then
+                TMC.Functions.DeleteEntity(v)
+            end
+            Citizen.Wait(1000)
+
+            if v then
+                local cachedOwner = v
+                SetTimeout(300000, function()
+                    TMC.Functions.DeleteEntity(cachedOwner)
+                end)
+            end
+        end
+    end)
+end
+
+function SpawnKeyAttackers()
+    killedAttackers = 0
+    local combatpeds = {}
+    local combatpedsgroup = GetHashKey("HATES_PLAYER")
+    local plyHash = GetHashKey("PLAYER")
+    SetPedRelationshipGroupHash(playerPedId, plyHash)
+    SetPedRelationshipGroupDefaultHash(playerPedId, plyHash)
+    SetRelationshipBetweenGroups(5, combatpedsgroup, plyHash)
+    SetRelationshipBetweenGroups(5, plyHash, combatpedsgroup)
+    for k,v in pairs(Config.Cocaine.KeyLocations[keyQuestLocation].keyAttackers) do
+        local pedinfo = v
+        TMC.Functions.LoadModel(pedinfo.Ped)
+
+        local ped = CreatePed(1, pedinfo.Ped, pedinfo.Coords.x, pedinfo.Coords.y, pedinfo.Coords.z, pedinfo.Coords.w, true, true)
+
+        GiveWeaponToPed(ped, pedinfo.Weapon, 100, false, true)
+        SetPedDropsWeaponsWhenDead(ped, false)
+        SetPedMaxHealth(ped, 300)
+        SetEntityHealth(ped, 300)
+        SetPedArmour(ped, 100)
+        SetPedAlertness(ped, 3)
+        SetPedAccuracy(ped, 75)
+        SetPedCombatMovement(ped, 2)
+        SetPedCombatAbility(ped, 100)
+        SetPedCombatAttributes(ped, 46, true)
+        SetPedCombatAttributes(ped, 26, true)
+        SetPedCombatAttributes(ped, 0, true)
+        SetPedCombatAttributes(ped, 28, true)
+        SetPedCombatAttributes(ped, 38, true)
+        SetPedCombatAttributes(ped, 4, true)
+        SetPedCombatAttributes(ped, 5, true)
+        SetPedPathCanUseClimbovers(ped, true)
+        SetPedPathCanUseLadders(ped, true)
+        SetPedPathCanDropFromHeight(ped, true)
+        SetPedPathAvoidFire(ped, true)
+        SetPedAllowedToDuck(ped, true)
+        SetPedRelationshipGroupHash(ped, combatpedsgroup)
+        SetPedRelationshipGroupDefaultHash(ped, combatpedsgroup)
+        SetPedSuffersCriticalHits(ped, false)
+        SetPedRagdollBlockingFlags(ped, 1)
+        table.insert(combatpeds, ped)
+
+        HostilePedTick(ped)
+    end
+
+    for k,v in pairs(combatpeds) do
+        TaskGoToEntity(v, playerPedId, 5000, 5, 2.5, 1073741824, 0)
+    end
+    Wait(2000)
+
+    for k,v in pairs(combatpeds) do
+        TaskGoToEntityWhileAimingAtEntity(v, playerPedId, playerPedId, 2.5, true, 0, 0, false, false, 'FIRING_PATTERN_FULL_AUTO')
+    end
+
+    Citizen.CreateThread(function()
+        for k,v in pairs(combatpeds) do
+            while not IsPedDeadOrDying(r) do
+                if #(GetEntityCoords(v) - position) > 500.0 then
+                    TMC.Functions.DeleteEntity(v)
+                end
+                Citizen.Wait(1000)
+            end
+
+            if #(GetEntityCoords(v) - position) > 500.0 then
+                TMC.Functions.DeleteEntity(v)
+            end
+            Citizen.Wait(1000)
+
+            if v then
+                local cachedOwner = v
+                SetTimeout(300000, function()
+                    TMC.Functions.DeleteEntity(cachedOwner)
+                end)
+            end
+        end
+    end)
+end
+
+function HostilePedTick(ped)
+    Citizen.CreateThread(function()
+        while not IsEntityDead(ped) and HasKeyQuest do
+            Citizen.Wait(1000)
+        end
+        Wait(250)
+        
+        killedAttackers = killedAttackers + 1;
+    end)
 end
 
 function generateCokeLabFunctions(lab)
@@ -1249,6 +1781,7 @@ end
 
 function startLabSoak()
     isProcessing = true
+    clothingCheckTick()
     local data = curIngredients
     if next(data) == nil then
         TMC.Functions.SimpleNotify("You didn't throw any ingredients in yet", "error", 1000 * 3)
@@ -1336,7 +1869,7 @@ function startLabSoak()
                 while v > 5 do
                     TMC.Functions.TriggerServerEvent("TMC:Server:RemoveItem", k, 5)
                     v = v - 5
-                    Citizen.Wait(200)
+                    Citizen.Wait(900)
                 end
                 TMC.Functions.TriggerServerEvent("TMC:Server:RemoveItem", k, v)
             end
@@ -1360,6 +1893,7 @@ function startLabSoak()
             end
 
         end
+        isProcessing = false
         ClearPedTasksImmediately(playerPedId)
     end, 1000 * 15, "Soaking Leaves")
     TMC.Functions.ShowPromptGroup(cokeLabSoakPrompt)
@@ -1397,6 +1931,7 @@ end
 
 function startLabPrep()
     isProcessing = true
+    clothingCheckTick()
     local data = curIngredients
     local bucketSlot, bucketSlotIndex, bucketitem = GetFirstItemSlot('cokeleaf_paste')
     local bucketpurity
@@ -1527,9 +2062,10 @@ function startLabPrep()
                 isProcessing = false
             end
         end
+        isProcessing = false
         ClearPedTasksImmediately(playerPedId)
         TMC.Functions.ShowPromptGroup(cokeLabPrepPrompt)
-    end, 1000 * 25, "Preparing Extract")
+    end, 1000 * 23, "Preparing Extract")
 end
 
 function LabCombine()
@@ -1564,6 +2100,7 @@ end
 
 function startLabCombine()
     isProcessing = true
+    clothingCheckTick()
     local data = curIngredients
     local bucketSlot, bucketSlotIndex, bucketitem = GetFirstItemSlot('cokechemicalslush')
     local bucketpurity
@@ -1662,9 +2199,20 @@ function startLabCombine()
         end
 
         purity = (purity + bucketpurity) / 2
+
         if purity > 100 then
+            --print("setting purity to 100")
             purity = 100
         end
+        if purity > 75 and bestRecipe == false then
+            --print("best recipe is false")
+            purity = 75
+        elseif purity > 89 and productionrep < 1000 then
+            purity = 89
+        elseif purity > 55 and productionrep < 350 then
+            purity = 55
+        end
+        
         if TMC.IsDev then
             print("purity of raw coke", purity)
         end
@@ -1705,9 +2253,10 @@ function startLabCombine()
                 isProcessing = false
             end
         end
+        isProcessing = false
         ClearPedTasksImmediately(playerPedId)
         TMC.Functions.ShowPromptGroup(cokeLabCombinePrompt)
-    end, 1000 * 40, "Combining Solidifying Chemicals")
+    end, 1000 * 35, "Combining Solidifying Chemicals")
 end
 
 function startLabBag(jobType)
@@ -2262,7 +2811,7 @@ RegisterNetEvent('drugs:cokebrickbag', function(cokequality, slot, index)
     if TMC.Functions.IsInZone('cokelabfunction') then
         if TMC.Functions.GetItemAmountByName('plastic_baggies') < 1 then TMC.Functions.SimpleNotify('You don\'t have enough baggies to split this brick', 'inform') return; end
         TMC.Functions.TriggerServerEvent('TMC:Server:RemoveItem', 'coke_brick', 1, slot, index)
-        Citizen.Wait(300)
+        Citizen.Wait(800)
         TMC.Functions.LoadAnimDict('anim@amb@business@coc@coc_unpack_cut_left@')
         TaskPlayAnim(playerPedId, 'anim@amb@business@coc@coc_unpack_cut_left@', 'coke_cut_v4_coccutter', 8.0, -8.0, 1000 * 62, 1, 0, false, false, false)
         TMC.Functions.ProgressBar(function(success)
@@ -2379,8 +2928,9 @@ RegisterNetEvent("drugs:cokefieldSendAbandonded", function(field, data)
     --print("data: ", data)
     --print("citizen id: ", LocalPlayer.state.citizenid)
     if data == LocalPlayer.state.citizenid then
-        if inField == field then
-            --TMC.Functions.SimpleNotify('You have harvested enough, don\'t come back without re-paying your dues', 'error', 1000 * 25)
+        if finishCollection then
+            local message = 'My people tell me your harvested the entire field. Good job! We\'ll get to tending it for the next person.'
+            phoneNotify(message, 1000 * 15)
         else
             TMC.Functions.SimpleNotify('You have abandoned your field, don\'t come back without re-paying your dues', 'error', 1000 * 25)
         end
@@ -2403,11 +2953,12 @@ RegisterNetEvent('drugs:cokeLabInfoUpdate', function(data)
 end)
 
 RegisterNetEvent('drugs:cokesendDropOff', function()
-    print('in send dropoff')
+    print('coke - in send dropoff')
     GiveDropOff()
 end)
 
 RegisterNetEvent('drugs:cokedropofffail', function()
+    print("coke - in dropofffail")
     if HasDropOff == true then
         local message = 'Shame, I was looking foward to working with you. Guess we will talk about this later. Wait a while before coming back.'
         phoneNotify(message, 1000 * 15)
@@ -2417,7 +2968,7 @@ RegisterNetEvent('drugs:cokedropofffail', function()
     HasDropOff = false
     inQueue = false
     dropOffSuccess = false
-    Citizen.Wait(300)
+    Citizen.Wait(800)
 end)
 
 function GetFirstItemSlot(name)
@@ -2435,16 +2986,12 @@ function randomRepChance(rep, percent)
     local randomNumber = TMC.Common.TrueRandom(1, 100)
     if randomNumber <= percent then
         TMC.Functions.TriggerServerEvent('drugs:addrep', rep)
-        Citizen.Wait(300)
+        Citizen.Wait(800)
         if productionrep == 350 or productionrep == 500 or productionrep == 700 or productionrep == 1000 then
             TMC.Functions.SimpleNotify("You feel like your quality is improving", "success", 1000 * 10)
         end
     end
 end
-
-RegisterNetEvent('drugs:unlocklab', function(lab, status)
-    Config.Cocaine.Labs[lab].Unlocked = status
-end)
 
 RegisterNetEvent('drugs:givekey', function(enscription, type, lab)
     local itemData = {
@@ -2452,9 +2999,9 @@ RegisterNetEvent('drugs:givekey', function(enscription, type, lab)
         type = type,
         lab = lab
     }
-    if TMC.Functions.HasPermission('god') then
-        TMC.Functions.TriggerServerEvent('TMC:Server:AddItem', 'mystery_key', 1, nil, itemData)
-    end
+    --if TMC.Functions.HasPermission('god') then
+    TMC.Functions.TriggerServerEvent('TMC:Server:AddItem', 'mystery_key', 1, nil, itemData)
+    --end
 end)
 
 function hasItemwithInfo(typeoflab, labid)
@@ -2470,21 +3017,6 @@ function hasItemwithInfo(typeoflab, labid)
     end
     return false
 end
-
-Citizen.CreateThread(function()
-    AddStateBagChangeHandler('rep', string.format('player:%s', GetPlayerServerId(playerId)), function(bag, key, value)
-        if value ~= nil and value['cokeharvest'] then
-            if value['cokeharvest'] > 2550 then
-                harvestrep = 2550
-            else
-                harvestrep = value['cokeharvest']
-            end
-        elseif value ~= nil and value['cokeproduction'] then
-            productionrep = value['cokeproduction']
-        end
-    end)
-end)
-
 
 -- Coke Consumption
 local CokeBaggyEffectThread = false
@@ -2708,20 +3240,6 @@ RegisterNetEvent("drugs:cokeaddCokeLeafPaste", function(itemData)
 end)
 
 
-Citizen.CreateThread(function()
-    BarrelManagePrompt = TMC.Functions.CreatePromptGroup({
-        {
-            Id = "barrel_manage",
-            Complete = function()
-                TMC.Functions.TriggerServerEvent("drugs:cokegetLeafData", GetNameOfZone(GetEntityCoords(playerPedId)), curIndex)
-                --TaskStartScenarioInPlace(playerPedId, "WORLD_HUMAN_GARDENER_PLANT", 0, true)
-            end,
-            Title = "Inspect Soaking Leafs",
-            Icon = "fas fa-magnifying-glass"
-        },
-    })
-end)
-
 function GetZonePedIsInTick()
     Citizen.CreateThread(function()
         local lastZone = GetNameOfZone(GetEntityCoords(playerPedId))
@@ -2780,3 +3298,5 @@ function getCurrentFuelCansInMix(data)
     return totalAmmo / petrolCanMaxAmmo
 
 end
+
+AddEventHandler('TMC:UpdatePosition', function(data) position = data; end)
