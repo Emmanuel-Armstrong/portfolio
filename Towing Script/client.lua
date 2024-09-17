@@ -334,6 +334,11 @@ Citizen.CreateThread(function()
         local config = Config.Towing
         TMC.Functions.RemoveBlip(curTowBlip)
         local temp = false
+        if impoundSpawnZones then
+            for k,v in pairs(impoundSpawnZones) do
+                TMC.Functions.RemoveZoneById(impoundSpawnZones[k].id)
+            end
+        end
         TMC.Functions.TriggerServerCallback('jobs:towing:server:setPartyStarter', function(result)
             temp = result
             while temp == false do
@@ -424,6 +429,7 @@ Citizen.CreateThread(function()
 
     TMC.Functions.AddPolyZoneEnterHandler('impoundzone', function(data)
         inTowZone = true
+        closestVehicle = nil
         local towRate = TMC.Common.TrueRandom(1, 100)
         local k = data.impoundzone
         local center = data.impoundzonecenter
@@ -446,14 +452,14 @@ Citizen.CreateThread(function()
                     for k,v in pairs(vehiclesInArea) do
                         local vin = Entity(v).state.vin
                         TMC.Functions.TriggerServerCallback('jobs:towing:towingCheckVin', function(result)
-                            if result ~= true and v ~= towVeh and GetIsVehicleEngineRunning(v) ~= true then
+                            if result ~= true and v ~= towVeh and GetIsVehicleEngineRunning(v) ~= 1 then
                                 closestVehicle = v
                             elseif result then
                                 TMC.Functions.SimpleNotify('This is a players car.', 'error')
                             end
                         end, vin)
                         if not vin then
-                            if v ~= towVeh and GetIsVehicleEngineRunning(v) ~= true then
+                            if v ~= towVeh and GetIsVehicleEngineRunning(v) ~= 1 then
                                 closestVehicle = v
                             end
                     end
@@ -643,15 +649,13 @@ function SetupTow(id, towLength, towStartType, vehSpawn)
         end
         firstTow = true
         towVeh = TMC.Functions.SpawnVehicle(config.StartLocations[id].VehType, vehSpawn, true)
-        SetVehicleOnGroundProperly(towVeh)
-        while not DoesEntityExist(towVeh) do
-            Citizen.Wait(100)
-        end
-
+        while not DoesEntityExist(towVeh) do Citizen.Wait(100) end
         local netId = VehToNet(towVeh)
+        while not netId do Citizen.Wait(10) end
         SetVehicleLivery(towVeh, 0)
         SetVehicleEngineOn(towVeh, true, true)
         SetEntityVelocity(towVeh, 0.1, 0.1, 0.1)
+        SetVehicleOnGroundProperly(towVeh)
         Citizen.Wait(300)
         if config.StartLocations[id].VehHint ~= nil then
             TMC.Functions.SimpleNotify(config.StartLocations[id].VehHint, 'speech')
@@ -1641,7 +1645,7 @@ function DrawTowingMarker(data)
         towingMarkerThread = true
         while inTowZone do
             DrawMarker(1, data.towzone.x, data.towzone.y, data.towzone.z - 1.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 1.0, 14, 143, 199, 180, false, false, 2, nil, nil, nil, false)
-            Citizen.Wait(5)
+            Citizen.Wait(0)
         end
         towingMarkerThread = false
     end)
@@ -1657,7 +1661,7 @@ function DrawReturnMarker()
         returnMarkerThread = true
         while inTowZone do
             DrawMarker(1, returnLocation.x, returnLocation.y, returnLocation.z - 1.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 1.0, 14, 143, 199, 180, false, false, 2, nil, nil, nil, false)
-            Citizen.Wait(5)
+            Citizen.Wait(0)
         end
         returnMarkerThread = false
     end)
@@ -1672,7 +1676,7 @@ function DrawTowVehMarker(data)
         towVehMarkerThread = true
         while inTowZone do
             DrawMarker(1, data.x, data.y, data.z - 1.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 1.0, 14, 143, 199, 180, false, false, 2, nil, nil, nil, false)
-            Citizen.Wait(5)
+            Citizen.Wait(0)
         end
         towVehMarkerThread = false
     end)
@@ -1812,6 +1816,11 @@ function DoTowCleanup(type)
         SetBlipRoute(createdTowBlips[curTowMission], true)
         SetBlipRouteColour(createdTowBlips[curTowMission], 38)
         TMC.Functions.TriggerServerEvent("jobs:towing:removePartyImpoundZones", lastTowParty)
+        if impoundSpawnZones then
+            for k,v in pairs(impoundSpawnZones) do
+                TMC.Functions.RemoveZoneById(impoundSpawnZones[k].id)
+            end
+        end
         foundSpot = false
         towStarter = nil
         hasCar = false
@@ -1836,6 +1845,11 @@ function DoTowCleanup(type)
         TMC.Functions.RemoveBlip(curTowBlip)
         TMC.Functions.RemoveBlip(returnTowBlip)
         TMC.Functions.TriggerServerEvent("jobs:towing:removePartyImpoundZones", lastTowParty)
+        if impoundSpawnZones then
+            for k,v in pairs(impoundSpawnZones) do
+                TMC.Functions.RemoveZoneById(impoundSpawnZones[k].id)
+            end
+        end
         foundSpot = false
         towStarter = nil
         if lastTowParty then
@@ -1856,6 +1870,11 @@ function DoTowCleanup(type)
         TMC.Functions.TriggerServerEvent('parties:server:setPartyData', 'state', 'end')
         TMC.Functions.TriggerServerEvent('jobs:towing:towPayout', lostTowVehicle, curTowMission, lastTowParty)
         TMC.Functions.TriggerServerEvent("jobs:towing:removePartyImpoundZones", lastTowParty)
+        if impoundSpawnZones then
+            for k,v in pairs(impoundSpawnZones) do
+                TMC.Functions.RemoveZoneById(impoundSpawnZones[k].id)
+            end
+        end
         TMC.Functions.RemoveBlip(curTowBlip)
         TMC.Functions.RemoveBlip(returnTowBlip)
         foundSpot = false
